@@ -54,7 +54,7 @@ Email 標題格式：
 
 Google Drive 根資料夾：
 
-https://drive.google.com/drive/u/0/folders/1E6w7XNwm3nn7XhjwQwdM62zVQCJgGK6M
+https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 
 上傳路徑：
 
