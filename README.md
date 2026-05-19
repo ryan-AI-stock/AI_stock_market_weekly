@@ -72,14 +72,14 @@ https://drive.google.com/drive/u/0/folders/1E6w7XNwm3nn7XhjwQwdM62zVQCJgGK6M
 
 排程：
 
-- 台灣時間每週五 15:00
-- 台灣時間每週五 15:30 備援
+- 台灣時間每週五 16:00
+- 台灣時間每週五 16:30 備援
 - 保留 `workflow_dispatch` 手動執行
 
 GitHub Actions 使用 UTC，因此 workflow 內為：
 
-- `0 7 * * 5`
-- `30 7 * * 5`
+- `0 8 * * 5`
+- `30 8 * * 5`
 
 ## 本機測試
 

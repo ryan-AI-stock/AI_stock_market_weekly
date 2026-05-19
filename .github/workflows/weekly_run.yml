@@ -1,10 +1,12 @@
-﻿name: 瘥勗?∟隅?Ｗ???
+name: Weekly Taiwan Stock Market Report
+
 on:
   schedule:
-    # ?啁??瘥曹? 15:00 = UTC 07:00嚗?撘??券??乩???yfinance end嚗??圈曹??嗥鞈?
+    # Taiwan time Friday 16:00 = UTC 08:00
     - cron: '0 8 * * 5'
-    # ?啁??瘥曹? 15:30 ?嚗?撘??典?銝?望??炎?伐??踹???撖?    - cron: '30 8 * * 5'
-  workflow_dispatch:          # ?迂???函雯??閫貊
+    # Taiwan time Friday 16:30 backup run
+    - cron: '30 8 * * 5'
+  workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -15,20 +17,21 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - name: ??蝔?蝣?
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 摰? Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 摰?憟辣
+      - name: Install packages
         run: |
           pip install yfinance pandas requests playwright google-api-python-client google-auth
           playwright install --with-deps chromium
 
-      - name: ?瑁?瘥梯隅?Ｗ???        env:
+      - name: Run weekly tracking report
+        env:
           GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
@@ -36,4 +39,3 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ vars.GOOGLE_DRIVE_FOLDER_ID }}
         run: python stock_market_tracking_system.py
-
