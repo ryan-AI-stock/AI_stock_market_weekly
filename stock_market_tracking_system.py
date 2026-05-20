@@ -1,4 +1,4 @@
-﻿"""
+"""
 每週台股趨勢訊號系統 v1
 ===================
 Repository : github.com/ryanhsu1983/AI_stock_market_weekly
@@ -2046,6 +2046,152 @@ def _is_market_relevant_news(title: str) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
+
+def _is_market_event_candidate(title: str) -> bool:
+    text = title.lower()
+    market_terms = [
+        "台股", "加權", "外資", "匯率", "台幣", "半導體", "晶片", "台積電", "tsmc",
+        "nvidia", "ai", "聯發科", "鴻海", "台達電", "廣達", "緯創", "緯穎",
+        "fed", "fomc", "cpi", "pce", "利率", "美中", "關稅", "晶片管制",
+        "原油", "opec", "中東", "戰爭", "財報", "營收", "法說"
+    ]
+    event_terms = [
+        "重大事件", "行事曆", "本週", "下週", "下周", "未來", "一個月", "法說", "法說會",
+        "營收", "財報", "公告", "決議", "會議", "公布", "發布", "財測", "展望",
+        "股東會", "除息", "fomc", "cpi", "pce", "opec", "管制", "關稅"
+    ]
+    return any(k in text for k in market_terms) and any(k in text for k in event_terms)
+
+
+def _infer_event_date_from_title(title: str, report_date) -> object | None:
+    text = str(title or "")
+    patterns = [
+        r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?",
+        r"(\d{1,2})[/-](\d{1,2})",
+        r"(\d{1,2})月(\d{1,2})日?",
+    ]
+    for idx, pattern in enumerate(patterns):
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        try:
+            if idx == 0:
+                year, month, day = map(int, match.groups())
+            else:
+                year = report_date.year
+                month, day = map(int, match.groups())
+                candidate = datetime(year, month, day).date()
+                if candidate < report_date - timedelta(days=60):
+                    year += 1
+            return datetime(year, month, day).date()
+        except ValueError:
+            continue
+
+    relative_map = {
+        "今天": 0,
+        "今日": 0,
+        "明天": 1,
+        "後天": 2,
+        "本週": 0,
+        "這週": 0,
+        "下週": 7,
+        "下周": 7,
+        "下個月": 30,
+    }
+    for keyword, offset in relative_map.items():
+        if keyword in text:
+            return report_date + timedelta(days=offset)
+    return None
+
+
+def fetch_auto_market_events(cfg: dict, report_date: str) -> list:
+    event_cfg = cfg.get("auto_market_events", {})
+    if not event_cfg.get("enabled", True):
+        return []
+
+    report_dt = datetime.strptime(report_date, "%Y-%m-%d").date()
+    lookback_days = int(event_cfg.get("lookback_days", cfg.get("market_events_lookback_days", 5)))
+    lookahead_days = int(event_cfg.get("lookahead_days", cfg.get("market_events_lookahead_days", 30)))
+    start = report_dt - timedelta(days=lookback_days)
+    end = report_dt + timedelta(days=lookahead_days)
+    queries = event_cfg.get("queries", [])
+    max_items = int(event_cfg.get("max_items", 8))
+    max_items_per_query = int(event_cfg.get("max_items_per_query", 2))
+    headers = {"User-Agent": "Mozilla/5.0"}
+    items = []
+    seen = set()
+
+    for query in queries:
+        url = (
+            "https://news.google.com/rss/search?q="
+            f"{quote_plus(query + f' when:{max(lookback_days, 7)}d')}"
+            "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        )
+        try:
+            resp = requests.get(url, headers=headers, timeout=12)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+        except Exception:
+            continue
+
+        query_count = 0
+        for item in root.findall(".//item"):
+            title = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            pub_text = item.findtext("pubDate", "").strip()
+            source = item.findtext("source", "").strip() or "Google News"
+            if not title or not _is_market_event_candidate(title):
+                continue
+            try:
+                pub_dt = parsedate_to_datetime(pub_text).astimezone(TAIPEI_TZ)
+            except Exception:
+                pub_dt = datetime.combine(report_dt, datetime.min.time()).replace(tzinfo=TAIPEI_TZ)
+            if pub_dt.date() < start:
+                continue
+            inferred_date = _infer_event_date_from_title(title, report_dt)
+            event_dt = inferred_date or pub_dt.date()
+            if not (start <= event_dt <= end):
+                continue
+            key = re.sub(r"\s+", "", f"{event_dt.isoformat()}{title}{source}".lower())
+            if key in seen:
+                continue
+            impact, scope, note = _classify_news_item(title)
+            if inferred_date is None:
+                note = f"{note}（未偵測到明確日期，暫以新聞發布日作為觀察日。）"
+            seen.add(key)
+            items.append({
+                "date": event_dt.strftime("%Y-%m-%d"),
+                "_event_date": event_dt,
+                "_published_at": pub_dt,
+                "title": title,
+                "impact": impact,
+                "scope": scope,
+                "note": note,
+                "source": source,
+                "link": link,
+            })
+            query_count += 1
+            if query_count >= max_items_per_query:
+                break
+
+    if event_cfg.get("fallback_manual_events", False) and not items:
+        for event in cfg.get("market_events", []):
+            try:
+                event_dt = datetime.strptime(event.get("date", ""), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if start <= event_dt <= end:
+                item = dict(event)
+                item["_event_date"] = event_dt
+                item.setdefault("source", "config.json market_events 備援")
+                items.append(item)
+
+    impact_rank = {"高": 4, "中高": 3, "中": 2, "低": 1}
+    items.sort(key=lambda x: (x.get("_event_date", report_dt), -impact_rank.get(x.get("impact", ""), 0)))
+    for item in items:
+        item.pop("_event_date", None)
+        item.pop("_published_at", None)
+    return items[:max_items]
 def fetch_auto_news(cfg: dict) -> list:
     news_cfg = cfg.get("auto_news", {})
     if not news_cfg.get("enabled", False):
@@ -2116,40 +2262,37 @@ def fetch_auto_news(cfg: dict) -> list:
     return items[:max_items]
 
 
-def market_events_html(cfg: dict, today: str, news_items: list | None = None) -> str:
-    events = cfg.get("market_events", [])
-    window_days = int(cfg.get("market_events_window_days", cfg.get("market_events_lookahead_days", 14)))
-    today_date = datetime.strptime(today, "%Y-%m-%d").date()
-    start = today_date - timedelta(days=window_days)
-    end = today_date + timedelta(days=window_days)
-    scheduled_rows = ""
+def market_events_html(cfg: dict, today: str, event_items: list | None = None,
+                       news_items: list | None = None) -> str:
+    event_cfg = cfg.get("auto_market_events", {})
+    lookback_days = int(event_cfg.get("lookback_days", cfg.get("market_events_lookback_days", 5)))
+    lookahead_days = int(event_cfg.get("lookahead_days", cfg.get("market_events_lookahead_days", 30)))
+    event_rows = ""
     news_rows = ""
     impact_colors = {"高": "#c0392b", "中高": "#e67e22", "中": "#f39c12", "低": "#7f8c8d"}
 
-    for event in events:
-        try:
-            event_date = datetime.strptime(event["date"], "%Y-%m-%d").date()
-        except Exception:
-            continue
-        if not (start <= event_date <= end):
-            continue
+    for event in event_items or []:
         color = impact_colors.get(event.get("impact", ""), "#7f8c8d")
-        scheduled_rows += (
+        title = html_lib.escape(event.get("title", ""))
+        source = html_lib.escape(event.get("source", "Google News"))
+        link = html_lib.escape(event.get("link", ""))
+        linked_title = f'<a href="{link}" style="color:#2c3e50;text-decoration:none;">{title}</a>' if link else title
+        event_rows += (
             f'<tr style="border-bottom:1px solid #eee;">'
-            f'<td style="padding:9px 12px;white-space:nowrap;color:#555;">{event["date"]}</td>'
-            f'<td style="padding:9px 12px;font-weight:bold;">{event["title"]}</td>'
+            f'<td style="padding:9px 12px;white-space:nowrap;color:#555;">{html_lib.escape(event.get("date", ""))}</td>'
+            f'<td style="padding:9px 12px;font-weight:bold;">{linked_title}</td>'
             f'<td style="padding:9px 12px;">'
             f'<span style="background:{color};color:#fff;font-size:11px;padding:2px 7px;border-radius:4px;white-space:nowrap;display:inline-block;">'
-            f'{event.get("impact", "未評估")}</span></td>'
+            f'{html_lib.escape(event.get("impact", "未評估"))}</span></td>'
             f'<td style="padding:9px 12px;color:#666;font-size:12px;line-height:1.6;">'
-            f'{event.get("scope", "")}｜{event.get("note", "")}'
-            f'<div style="color:#aaa;margin-top:3px;">來源：{event.get("source", "手動維護")}</div></td>'
+            f'{html_lib.escape(event.get("scope", ""))}｜{html_lib.escape(event.get("note", ""))}'
+            f'<div style="color:#aaa;margin-top:3px;">來源：{source}</div></td>'
             f'</tr>'
         )
 
-    if not scheduled_rows:
-        scheduled_rows = (f'<tr><td style="padding:10px 12px;color:#777;font-size:12px;line-height:1.6;" colspan="4">'
-                f'固定行事曆篩選邏輯：只顯示報告日前後 {window_days} 天內、且已寫在 config.json 的 market_events 事件；目前沒有符合條件的人工維護事件。</td></tr>')
+    if not event_rows:
+        event_rows = (f'<tr><td style="padding:10px 12px;color:#777;font-size:12px;line-height:1.6;" colspan="4">'
+                      f'過去 {lookback_days} 天至未來 {lookahead_days} 天內尚未掃描到高關聯重大事件。</td></tr>')
 
     for item in news_items or []:
         color = impact_colors.get(item.get("impact", ""), "#7f8c8d")
@@ -2159,13 +2302,13 @@ def market_events_html(cfg: dict, today: str, news_items: list | None = None) ->
         linked_title = f'<a href="{link}" style="color:#2c3e50;text-decoration:none;">{title}</a>' if link else title
         news_rows += (
             f'<tr style="border-bottom:1px solid #eee;">'
-            f'<td style="padding:9px 12px;white-space:nowrap;color:#555;">{item.get("date", "")}</td>'
+            f'<td style="padding:9px 12px;white-space:nowrap;color:#555;">{html_lib.escape(item.get("date", ""))}</td>'
             f'<td style="padding:9px 12px;font-weight:bold;">{linked_title}</td>'
             f'<td style="padding:9px 12px;">'
             f'<span style="background:{color};color:#fff;font-size:11px;padding:2px 7px;border-radius:4px;white-space:nowrap;display:inline-block;">'
-            f'{item.get("impact", "未評估")}</span></td>'
+            f'{html_lib.escape(item.get("impact", "未評估"))}</span></td>'
             f'<td style="padding:9px 12px;color:#666;font-size:12px;line-height:1.6;">'
-            f'{item.get("scope", "")}｜{item.get("note", "")}'
+            f'{html_lib.escape(item.get("scope", ""))}｜{html_lib.escape(item.get("note", ""))}'
             f'<div style="color:#aaa;margin-top:3px;">來源：{source}</div></td>'
             f'</tr>'
         )
@@ -2175,11 +2318,11 @@ def market_events_html(cfg: dict, today: str, news_items: list | None = None) ->
                      f'近 {cfg.get("auto_news", {}).get("lookback_days", 7)} 天未抓到符合條件的高關聯新聞。</td></tr>')
 
     return (
-        f'<h3 style="color:#2c3e50;border-bottom:2px solid #2c3e50;padding-bottom:6px;">消息面與重大行事曆</h3>'
-        f'<div style="font-size:12px;color:#777;margin:-12px 0 10px;">'
-        f'固定行事曆顯示今天前後 {window_days} 天事件；自動新聞掃描只抓近 '
-        f'{cfg.get("auto_news", {}).get("lookback_days", 3)} 天高關聯消息，例如油價、戰爭、美中、Fed與半導體新聞。</div>'
-        f'<div style="font-weight:bold;color:#2c3e50;margin:4px 0 6px;">固定重大行事曆</div>'
+        f'<h3 style="color:#2c3e50;border-bottom:2px solid #2c3e50;padding-bottom:6px;">消息面與重大事件</h3>'
+        f'<div style="font-size:12px;color:#777;margin:-12px 0 10px;line-height:1.6;">'
+        f'自動重大事件掃描顯示報告日前 {lookback_days} 天至後 {lookahead_days} 天內，偏向行事曆、法說會、財報、Fed、CPI、PCE、關稅、晶片管制、AI半導體、原油與匯率等對台股有影響的事件；近期新聞掃描保留原本近 '
+        f'{cfg.get("auto_news", {}).get("lookback_days", 3)} 天高關聯消息。</div>'
+        f'<div style="font-weight:bold;color:#2c3e50;margin:4px 0 6px;">自動重大事件掃描</div>'
         f'<table style="width:100%;border-collapse:collapse;margin-bottom:28px;'
         f'border:1px solid #ddd;border-radius:8px;overflow:hidden;">'
         f'<thead><tr style="background:#34495e;color:#fff;">'
@@ -2187,7 +2330,7 @@ def market_events_html(cfg: dict, today: str, news_items: list | None = None) ->
         f'<th style="padding:10px 12px;text-align:left;">事件</th>'
         f'<th style="padding:10px 12px;text-align:left;">影響</th>'
         f'<th style="padding:10px 12px;text-align:left;">可能影響</th>'
-        f'</tr></thead><tbody>{scheduled_rows}</tbody></table>'
+        f'</tr></thead><tbody>{event_rows}</tbody></table>'
         f'<div style="font-weight:bold;color:#2c3e50;margin:4px 0 6px;">近期自動新聞掃描</div>'
         f'<table style="width:100%;border-collapse:collapse;margin-bottom:28px;'
         f'border:1px solid #ddd;border-radius:8px;overflow:hidden;">'
@@ -2198,8 +2341,6 @@ def market_events_html(cfg: dict, today: str, news_items: list | None = None) ->
         f'<th style="padding:10px 12px;text-align:left;">可能影響</th>'
         f'</tr></thead><tbody>{news_rows}</tbody></table>'
     )
-
-
 def scoring_rules_html() -> str:
     weights = [
         ("趨勢方向", WEIGHTS["trend"], "市場主方向"),
@@ -2623,16 +2764,17 @@ def weekly_stock_detail_block(name: str, ticker: str, result: dict) -> str:
 
 # ── 組裝 HTML Email ──────────────────────────────────────────
 def build_email_html(results: list, today: str, cfg: dict | None = None,
-                     macro: dict | None = None, news_items: list | None = None) -> str:
+                     macro: dict | None = None, news_items: list | None = None,
+                     event_items: list | None = None) -> str:
     meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
     market_brief = weekly_market_overview_html(results, macro)
     scoreboard = weekly_stock_scoreboard_html(results)
     matrix = weekly_trend_matrix_html(results)
-    event_news_items = list(news_items or [])
-    if not event_news_items and results:
+    recent_news_items = list(news_items or [])
+    if not recent_news_items and results:
         market_name, _market_ticker, market_result = results[0]
         market_weekly = market_result.get("weekly", {})
-        event_news_items.append({
+        recent_news_items.append({
             "date": today,
             "title": f"{market_name}本週盤勢回顧：{pct_text(market_weekly.get('week_chg_pct'))}",
             "impact": "中",
@@ -2641,7 +2783,7 @@ def build_email_html(results: list, today: str, cfg: dict | None = None,
             "source": "系統盤勢摘要",
             "link": "",
         })
-    events_block = market_events_html(cfg or {}, today, event_news_items)
+    events_block = market_events_html(cfg or {}, today, event_items or [], recent_news_items)
     rules_block = scoring_rules_html()
     sorted_details = sort_weekly_results(results, include_market=True)
     details = "".join(
@@ -2693,29 +2835,22 @@ def _social_short_text(value: str, limit: int = 34) -> str:
     return value[:limit] + ("..." if len(value) > limit else "")
 
 
-def _social_events(cfg: dict | None, today: str, limit: int = 4) -> list[dict]:
-    if not cfg:
-        return []
-    events = cfg.get("market_events", [])
-    window_days = int(cfg.get("market_events_window_days", cfg.get("market_events_lookahead_days", 14)))
+def _social_events(event_items: list | None, today: str, limit: int = 4) -> list[dict]:
     today_date = datetime.strptime(today, "%Y-%m-%d").date()
-    start = today_date - timedelta(days=window_days)
-    end = today_date + timedelta(days=window_days)
     filtered = []
-    for event in events:
+    for event in event_items or []:
         try:
-            event_date = datetime.strptime(event["date"], "%Y-%m-%d").date()
+            event_date = datetime.strptime(event.get("date", ""), "%Y-%m-%d").date()
         except Exception:
-            continue
-        if start <= event_date <= end:
-            item = dict(event)
-            item["_distance"] = abs((event_date - today_date).days)
-            filtered.append(item)
+            event_date = today_date
+        item = dict(event)
+        item["_distance"] = abs((event_date - today_date).days)
+        filtered.append(item)
     impact_rank = {"高": 4, "中高": 3, "中": 2, "低": 1}
     filtered.sort(key=lambda x: (x["_distance"], -impact_rank.get(x.get("impact", ""), 0), x.get("date", "")))
+    for item in filtered:
+        item.pop("_distance", None)
     return filtered[:limit]
-
-
 def _social_indicator_tile(result: dict, label: str, title: str | None = None) -> str:
     value, color, note = _social_item_detail(result, label)
     title = title or label
@@ -2789,7 +2924,8 @@ def _social_key_indicator_tiles(result: dict, limit: int = 2) -> str:
 
 
 def build_social_report_pages(results: list, today: str, cfg: dict | None = None,
-                              macro: dict | None = None, news_items: list | None = None) -> list[str]:
+                              macro: dict | None = None, news_items: list | None = None,
+                              event_items: list | None = None) -> list[str]:
     news_items = news_items or []
     date_text = today.replace("-", "/")
     meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
@@ -2833,18 +2969,13 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
     """
 
     impact_colors = {"高": UP_COLOR, "中高": WARN_COLOR, "中": "#b8871b", "低": NEUTRAL_COLOR}
-    events = _social_events(cfg, today, 4)
-    event_items = []
-    event_items.extend(events)
-    if news_items:
-        for item in news_items[: max(0, 4 - len(event_items))]:
-            event_items.append(item)
+    event_items = _social_events(event_items, today, 4)
     if not event_items:
         event_items.append({
             "date": today,
-            "title": "市場週變化觀察",
+            "title": "自動重大事件掃描",
             "impact": "中",
-            "note": f"本週加權指數{pct_text(market_weekly.get('week_chg_pct'))}；若新聞來源暫時無資料，仍以價格、法人、匯率與利率作為週報判斷基礎。",
+            "note": "過去 5 天至未來 30 天內尚未掃描到高關聯重大事件。",
         })
     event_rows = "".join(
         f"<div class='event' style='--c:{impact_colors.get(e.get('impact',''), NEUTRAL_COLOR)}'><div class='event-title'>{html_lib.escape(_social_short_text(e.get('title',''), 36))}</div><div class='event-note'>{html_lib.escape(e.get('date',''))}｜{html_lib.escape(_social_short_text(e.get('note',''), 66))}</div></div>"
@@ -3225,10 +3356,13 @@ def main():
         print("所有分析失敗，中止")
         return
 
+    event_items = fetch_auto_market_events(cfg, today)
+    print(f"  自動重大事件掃描：取得 {len(event_items)} 則高關聯事件")
+
     if drive_file_exists(f"{report_meta['date_key']}_week{report_meta['week']}_01.png", cfg):
         return
 
-    html = build_email_html(results, today, cfg, macro, news_items)
+    html = build_email_html(results, today, cfg, macro, news_items, event_items)
     preview_path = save_email_preview(html)
     print(f"\n已產生 Email 預覽：{preview_path}")
 
@@ -3240,7 +3374,7 @@ def main():
         print(f"❌ Email 失敗：{e}")
 
     social_pages = save_social_report_pages(
-        build_social_report_pages(results, today, cfg, macro, news_items), today
+        build_social_report_pages(results, today, cfg, macro, news_items, event_items), today
     )
     for idx, social_page in enumerate(social_pages, start=1):
         image_name = f"{report_meta['date_key']}_week{report_meta['week']}_{idx:02d}.png"
