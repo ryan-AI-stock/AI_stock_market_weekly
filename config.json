@@ -210,7 +210,7 @@
   "email": {
     "to": "zergva@gmail.com",
     "from": "zergva@gmail.com",
-    "subject": "【每週台股趨勢報告】{date} 第{week}週"
+    "subject": "【被AI研究社】{date} 每週股市訊號報告"
   },
 
   "drive_report": {
