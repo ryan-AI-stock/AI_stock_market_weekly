@@ -8,13 +8,12 @@ on:
     - cron: '30 8 * * 5'
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   run-weekly-signal:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout code
@@ -32,10 +31,12 @@ jobs:
 
       - name: Run weekly tracking report
         env:
-          GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ vars.GOOGLE_DRIVE_FOLDER_ID }}
+          WEEKLY_REPORT_DRIVE_FOLDER_ID: ${{ secrets.WEEKLY_REPORT_DRIVE_FOLDER_ID }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID || vars.GOOGLE_DRIVE_FOLDER_ID }}
         run: python stock_market_tracking_system.py

@@ -90,4 +90,4 @@ python -m py_compile stock_market_tracking_system.py
 python stock_market_tracking_system.py
 ```
 
-如果本機沒有設定 `GMAIL_PASSWORD`，程式會跳過寄信，但仍會產生 HTML 預覽。若沒有 Google OAuth 或 service account 憑證，圖片會保留在本機但不會上傳。
+如果本機沒有設定 `SMTP_USERNAME`、`SMTP_PASSWORD`、`REPORT_EMAIL_TO`，程式會跳過寄信，但仍會產生 HTML 預覽。若沒有 Google OAuth 憑證，圖片會保留在本機但不會上傳。
