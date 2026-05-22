@@ -1,6 +1,6 @@
 # AI_stock_market_weekly
 
-台股每週訊號追蹤專案。程式會在每週五台灣時間收盤後抓取資料，追蹤台灣加權指數與中大型權值股，產出「每週台股趨勢報告」HTML Email 與社群圖片。
+台股每週訊號追蹤專案。程式會在每週五台灣時間收盤後抓取資料，追蹤台灣加權指數與中大型權值股，產出「每週台股趨勢報告」PDF。
 
 正式工作目錄：
 
@@ -23,8 +23,8 @@ https://github.com/ryanhsu1983/AI_stock_market_weekly
 
 ## 主要檔案
 
-- `stock_market_tracking_system.py`：主程式，負責抓資料、計算每日模型與週報指標、產生 HTML 報告、圖片與寄信。
-- `config.json`：追蹤標的、指標門檻、Email、重大事件、Google Drive 上傳設定。
+- `stock_market_tracking_system.py`：主程式，負責抓資料、計算週報模型與週報指標、產生 PDF 報告並上傳 Google Drive。
+- `config.json`：追蹤標的、指標門檻、重大事件、Google Drive 上傳與 PDF 設定。
 - `.github/workflows/weekly_run.yml`：GitHub Actions 每週五自動執行設定。
 - `email_preview.html`：本機執行後產生的預覽檔，不應提交到 Git。
 
@@ -41,16 +41,20 @@ https://github.com/ryanhsu1983/AI_stock_market_weekly
 - 下週觀察重點
 - 強勢續抱、過熱不追、轉弱觀察、修正等待、盤整區間等週報判讀
 
-## Email 與圖片
+## PDF 輸出
 
-Email 標題格式：
+週報目前不寄 Email，workflow 不依賴 SMTP secrets。
 
-`【每週台股趨勢報告】YYYY-MM-DD 第N週`
+免費觀眾版固定輸出：
 
-社群圖片最多兩張：
+- 檔名：`每週台股報告.pdf`
+- Google Drive folder ID：`1HnfRzfdu5XeBF51zBKBLvhTNZ8Z-rSCS`
+- 若 Google Drive 已存在同名檔案或已設定固定 file_id，程式會更新同一個檔案，避免 LINE 官方回覆連結變動。
 
-- 第 1 張：本週市場總覽、重大事件、新聞、加權指數週趨勢
-- 第 2 張：8 檔個股週變化與下週觀察重點
+自用備份版：
+
+- 檔名格式：`每週台股報告_YYYYMMDD.pdf`
+- 上傳位置維持既有週報備份資料夾。
 
 Google Drive 根資料夾：
 
@@ -60,13 +64,7 @@ https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 
 直接上傳到上述 Google Drive 根資料夾，不再建立子資料夾。
 
-圖片檔名格式：
-
-`YYYYMMDD_weekN_01.png`
-
-`YYYYMMDD_weekN_02.png`
-
-同一週防重複寄送會以第 1 張週報圖片檔名作為完成判斷；若 Google Drive 已存在同週檔案，備援排程或手動重跑會跳過寄送。
+同一週防重複產出會以自用備份 PDF 檔名作為完成判斷；排程備援若偵測到同週檔案會跳過。手動執行可用 `force_run=true` 強制重新產生並更新 PDF。
 
 ## GitHub Actions
 
@@ -74,7 +72,7 @@ https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 
 - 台灣時間每週五 16:00
 - 台灣時間每週五 16:30 備援
-- 保留 `workflow_dispatch` 手動執行
+- 保留 `workflow_dispatch` 手動執行，支援 `force_run`
 
 GitHub Actions 使用 UTC，因此 workflow 內為：
 
@@ -90,4 +88,4 @@ python -m py_compile stock_market_tracking_system.py
 python stock_market_tracking_system.py
 ```
 
-如果本機沒有設定 `SMTP_USERNAME`、`SMTP_PASSWORD`、`REPORT_EMAIL_TO`，程式會跳過寄信，但仍會產生 HTML 預覽。若沒有 Google OAuth 憑證，圖片會保留在本機但不會上傳。
+程式會產生 HTML 預覽、免費版 PDF 與自用備份 PDF。若沒有 Google OAuth 憑證，PDF 會保留在本機但不會上傳。

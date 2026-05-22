@@ -208,6 +208,7 @@
   },
 
   "email": {
+    "enabled": false,
     "to": "zergva@gmail.com",
     "from": "zergva@gmail.com",
     "subject": "【被AI研究社】{date} 每週股市訊號報告"
@@ -217,6 +218,16 @@
     "enabled": true,
     "folder_id": "1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T",
     "folder_path": [],
-    "image_width": 1080
+    "image_width": 1080,
+    "format": "pdf"
+  },
+
+  "public_report": {
+    "enabled": true,
+    "folder_id": "1HnfRzfdu5XeBF51zBKBLvhTNZ8Z-rSCS",
+    "fixed_file_id": "",
+    "fixed_file_name": "每週台股報告.pdf",
+    "format": "pdf",
+    "make_public": true
   }
 }

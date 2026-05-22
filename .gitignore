@@ -3,3 +3,5 @@ __pycache__/
 email_preview.html
 social_report_*.html
 *.png
+*.pdf
+public_report/

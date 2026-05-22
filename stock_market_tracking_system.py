@@ -844,7 +844,62 @@ def _parse_signal_level(level: str) -> tuple:
     return "HOLD", "NEUTRAL"
 
 
-def build_trade_plan(level: str, regime: dict, b60: dict, lev_warn: bool = False) -> dict:
+def _phrase_list(items: list[str], limit: int = 3) -> str:
+    cleaned = []
+    for item in items:
+        item = str(item or "").strip()
+        if item and item not in cleaned:
+            cleaned.append(item)
+    return "、".join(cleaned[:limit])
+
+
+def _build_contextual_reason(direction: str, level_key: str, regime: dict,
+                             b60: dict, context: dict | None) -> str | None:
+    if not context:
+        return None
+    positives = _phrase_list(context.get("positive_evidence", []), 3)
+    risks = _phrase_list(context.get("risk_evidence", []), 3)
+    regime_key = regime.get("key", "")
+    ma60_dist = context.get("ma60_dist")
+    recent_low_ma60_dist = context.get("recent_low_ma60_dist")
+    near_ma60 = (
+        ma60_dist is not None and abs(ma60_dist) <= 5
+    ) or (
+        recent_low_ma60_dist is not None and recent_low_ma60_dist <= 2
+    )
+
+    if direction == "BUY":
+        if near_ma60 and regime_key in ("BULL_PULLBACK", "RANGE"):
+            return "目前較像季線附近的支撐反彈，" + (
+                f"{positives}是正面訊號，" if positives else ""
+            ) + "但仍要看量能與法人是否延續，才算趨勢重新轉強。"
+        if regime_key == "BEAR":
+            return "空頭或中期趨勢尚未修復時，反彈先視為修正中的反彈；買進訊號只適合觀察或小部位，不適合追價。"
+        if b60.get("zone") == "overheated":
+            return "中期乖離偏高，代表安全邊際下降；即使動能仍強，也以續抱或等待拉回為主。"
+        if positives and risks:
+            return f"{positives}偏正面，但{risks}仍需修復；適合等確認，不急著追價。"
+        if positives:
+            return f"{positives}支持趨勢延續，但週報模型仍以分批和安全邊際為主。"
+
+    if direction == "SELL":
+        if regime_key in ("STRONG_BULL", "BULL_PULLBACK") and level_key in ("WEAK", "NOTICE"):
+            return "多頭修正中的弱賣訊偏向風險提醒，不代表立刻出清核心部位；重點看是否跌破關鍵均線。"
+        if risks:
+            return f"{risks}顯示風險升溫；若後續法人與量能未改善，應優先控管部位。"
+
+    if direction == "OVERHEATED":
+        return "過熱代表追價風險高，不代表趨勢一定結束；核心部位可觀察，但新資金等待拉回比較合理。"
+
+    if regime_key == "RANGE":
+        if risks:
+            return f"目前屬於盤整區間，{risks}使整理偏保守；先看區間高低點是否突破。"
+        return "目前屬於盤整區間，方向尚在累積；若法人與量能穩定，整理仍可視為良性。"
+    return None
+
+
+def build_trade_plan(level: str, regime: dict, b60: dict, lev_warn: bool = False,
+                     context: dict | None = None) -> dict:
     direction, level_key = _parse_signal_level(level)
     base_pct = TRADE_BASE_PCTS.get(level_key, 0)
     regime_key = regime["key"]
@@ -913,6 +968,10 @@ def build_trade_plan(level: str, regime: dict, b60: dict, lev_warn: bool = False
     if level_key == "NOTICE":
         trade_pct = 0
         reason = "提醒等級只代表市場溫度有變化，不作為實際交易依據。"
+
+    contextual_reason = _build_contextual_reason(direction, level_key, regime, b60, context)
+    if contextual_reason:
+        reason = contextual_reason
 
     if lev_warn and trade_pct > 0:
         trade_pct = min(trade_pct, 20)
@@ -1529,7 +1588,13 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
     items = []
     buy_score = 0.0
     sell_score = 0.0
-    max_possible = float(sum(WEIGHTS.values()))
+    max_possible = float(sum(WEIGHTS.values()) + WEIGHTS["trend"] * 0.35)
+    fx_signal = "neutral"
+    rate_signal = "neutral"
+    inst_signal = "neutral"
+    kd_signal = "neutral"
+    volume_signal = "neutral"
+    obv_signal = "neutral"
 
     def add_item(label, value, color, note, buy=0.0, sell=0.0):
         nonlocal buy_score, sell_score
@@ -1573,6 +1638,29 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         trend_buy, trend_sell,
     )
     regime = classify_market_regime(close, ma_s, ma_m, ma_l, ma_s_prev, ma_m_prev, ma_l_prev)
+    ma60_dist = (close / ma_l - 1) * 100 if ma_l else 0.0
+    recent_low_ma60_dist = None
+    if f"MA{l}" in df.columns:
+        ma60_base = df[f"MA{l}"].tail(5).replace(0, pd.NA)
+        low_dist = ((df["Low"].tail(5) / ma60_base) - 1) * 100
+        if not low_dist.dropna().empty:
+            recent_low_ma60_dist = float(low_dist.dropna().min())
+    near_ma60_rebound = close > prev_close and (abs(ma60_dist) <= 5 or (recent_low_ma60_dist is not None and recent_low_ma60_dist <= 2))
+    if near_ma60_rebound:
+        support_note = (
+            f"收盤距季線{ma60_dist:+.1f}%｜近5日低點距季線"
+            f"{recent_low_ma60_dist:+.1f}%｜偏向支撐反彈，需後續量能與法人延續才算轉強"
+        )
+        add_item("季線支撐位置", "季線附近支撐反彈", INFO_COLOR, support_note, WEIGHTS["trend"] * 0.20, 0)
+    elif close < ma_l and ma_m < ma_l:
+        support_note = f"收盤距季線{ma60_dist:+.1f}%｜價格與中期均線同步落在季線下方，反彈先保守看待"
+        add_item("季線支撐位置", "跌破季線且中期轉弱", DOWN_COLOR, support_note, 0, WEIGHTS["trend"] * 0.35)
+    elif ma60_dist >= 20:
+        support_note = f"收盤距季線{ma60_dist:+.1f}%｜中期乖離偏高，安全邊際下降，接近追價風險區"
+        add_item("季線支撐位置", "離季線偏遠", WARN_COLOR, support_note, 0, WEIGHTS["trend"] * 0.25)
+    else:
+        support_note = f"收盤距季線{ma60_dist:+.1f}%｜位置中性，仍以趨勢與籌碼是否延續為主"
+        add_item("季線支撐位置", "安全邊際中性", NEUTRAL_COLOR, support_note)
 
     if use_fx:
         fx = macro.get("fx") if macro else None
@@ -1589,12 +1677,16 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
             full = WEIGHTS["fx"] * (0.75 if exporter else 1.0)
             half = full * 0.5
             if fx_5d is not None and fx_20d is not None and (fx_5d >= 1.0 or fx_20d >= 2.0):
+                fx_signal = "risk"
                 add_item("美元/台幣匯率", "台幣明顯轉弱 ⚠️", "#e67e22", fx_note, 0, full)
             elif fx_5d is not None and fx_20d is not None and (fx_5d <= -1.0 or fx_20d <= -2.0):
+                fx_signal = "support"
                 add_item("美元/台幣匯率", "台幣明顯轉強 ✅", UP_COLOR, fx_note, full, 0)
             elif fx_5d is not None and fx_20d is not None and (fx_5d >= 0.5 or fx_20d >= 1.0):
+                fx_signal = "mild_risk"
                 add_item("美元/台幣匯率", "台幣偏弱", "#f39c12", fx_note, 0, half)
             elif fx_5d is not None and fx_20d is not None and (fx_5d <= -0.5 or fx_20d <= -1.0):
+                fx_signal = "mild_support"
                 add_item("美元/台幣匯率", "台幣偏強", "#3498db", fx_note, half, 0)
             else:
                 add_item("美元/台幣匯率", "匯率中性", NEUTRAL_COLOR, fx_note)
@@ -1616,12 +1708,16 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
                 "殖利率上升會提高股市折現率，通常壓抑科技股評價；殖利率下行則有利成長股估值修復"
             )
             if bp_5d is not None and bp_20d is not None and (bp_5d >= 10 or bp_20d >= 20):
+                rate_signal = "risk"
                 add_item("利率環境", "殖利率快速上升 ⚠️", DOWN_COLOR, rate_note, 0, WEIGHTS["rates"])
             elif bp_5d is not None and bp_20d is not None and (bp_5d <= -10 or bp_20d <= -20):
+                rate_signal = "support"
                 add_item("利率環境", "殖利率明顯下行 ✅", UP_COLOR, rate_note, WEIGHTS["rates"], 0)
             elif bp_5d is not None and bp_20d is not None and (bp_5d >= 5 or bp_20d >= 10):
+                rate_signal = "mild_risk"
                 add_item("利率環境", "利率偏上行", "#f39c12", rate_note, 0, WEIGHTS["rates"] * 0.5)
             elif bp_5d is not None and bp_20d is not None and (bp_5d <= -5 or bp_20d <= -10):
+                rate_signal = "mild_support"
                 add_item("利率環境", "利率偏下行", "#3498db", rate_note, WEIGHTS["rates"] * 0.5, 0)
             else:
                 add_item("利率環境", "利率中性", NEUTRAL_COLOR, rate_note)
@@ -1665,12 +1761,16 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
                 f"占20日均量 {format_ratio_value(net_ratio)}"
             )
             if net_ratio >= 5 and buy_breadth >= 2:
+                inst_signal = "strong_buy"
                 add_item("三大法人", "法人明顯買超 ✅", UP_COLOR, inst_note, WEIGHTS["institutional"], 0)
             elif net_ratio <= -5 and sell_breadth >= 2:
+                inst_signal = "strong_sell"
                 add_item("三大法人", "法人明顯賣超 ⚠️", DOWN_COLOR, inst_note, 0, WEIGHTS["institutional"])
             elif net_ratio > 1 or buy_breadth >= 2:
+                inst_signal = "buy"
                 add_item("三大法人", "法人偏買", UP_COLOR, inst_note, WEIGHTS["institutional"] * 0.5, 0)
             elif net_ratio < -1 or sell_breadth >= 2:
+                inst_signal = "sell"
                 add_item("三大法人", "法人偏賣", DOWN_COLOR, inst_note, 0, WEIGHTS["institutional"] * 0.5)
             else:
                 add_item("三大法人", "籌碼中性", NEUTRAL_COLOR, inst_note)
@@ -1689,12 +1789,16 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         f"賣出區:K>{thr['kd_sell']}且K下穿D｜KD適合抓時機，但容易鈍化"
     )
     if kd_buy:
+        kd_signal = "golden_cross"
         add_item("KD", "低檔黃金交叉 ✅", UP_COLOR, kd_note, WEIGHTS["kd"], 0)
     elif kd_sell:
+        kd_signal = "death_cross"
         add_item("KD", "高檔死亡交叉 ⚠️", DOWN_COLOR, kd_note, 0, WEIGHTS["kd"])
     elif k > d and k < 50:
+        kd_signal = "turning_up"
         add_item("KD", "低檔轉強但未交叉", "#3498db", kd_note, WEIGHTS["kd"] * 0.4, 0)
     elif k < d and k > 50:
+        kd_signal = "turning_down"
         add_item("KD", "高檔轉弱但未交叉", "#f39c12", kd_note, 0, WEIGHTS["kd"] * 0.4)
     else:
         add_item("KD", "無交叉訊號", NEUTRAL_COLOR, kd_note)
@@ -1720,10 +1824,13 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
             f"量能是確認項，權重較低"
         )
         if vol_trend > 0 and vol_ratio > 1.2 and close > prev_close:
+            volume_signal = "price_up_volume_up"
             add_item("量能趨勢", "價漲量增 ✅", UP_COLOR, vol_note, WEIGHTS["vol"], 0)
         elif vol_trend > 0 and vol_ratio > 1.2 and close < prev_close:
+            volume_signal = "price_down_volume_up"
             add_item("量能趨勢", "價跌量增 ⚠️", DOWN_COLOR, vol_note, 0, WEIGHTS["vol"])
         elif vol_trend < 0 and vol_ratio < 0.8 and close < prev_close:
+            volume_signal = "price_down_volume_down"
             add_item("量能趨勢", "價跌量縮", "#f39c12", vol_note, 0, WEIGHTS["vol"] * 0.4)
         else:
             add_item("量能趨勢", "量能平穩", NEUTRAL_COLOR, vol_note)
@@ -1740,12 +1847,16 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
             f"OBV可觀察量價累積，但雜訊高於趨勢與MACD"
         )
         if obv_rising and price_up:
+            obv_signal = "rising"
             add_item("OBV", "量價齊揚 ✅", UP_COLOR, obv_note, WEIGHTS["obv"], 0)
         elif obv_rising and not price_up:
+            obv_signal = "leading"
             add_item("OBV", "OBV領先價格", "#3498db", obv_note, WEIGHTS["obv"] * 0.5, 0)
         elif obv_falling and not price_up:
+            obv_signal = "falling"
             add_item("OBV", "量價齊跌 ⚠️", DOWN_COLOR, obv_note, 0, WEIGHTS["obv"])
         elif obv_falling and price_up:
+            obv_signal = "divergence"
             add_item("OBV", "價漲量縮背離 ⚠️", "#f39c12", obv_note, 0, WEIGHTS["obv"] * 0.5)
         else:
             add_item("OBV", "OBV中性", NEUTRAL_COLOR, obv_note)
@@ -1766,6 +1877,62 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
 
     effective_buy = 0.0 if b60["locked"] else buy_score
     effective_sell = sell_score
+    near_overheated = b60.get("zone") == "overheated" or b60.get("bias60", 0) >= b60.get("p_high", 999) * 0.90 or ma60_dist >= 20
+    if near_overheated and not b60["locked"] and effective_buy >= 30:
+        effective_buy = min(effective_buy, 29)
+
+    positive_evidence = []
+    risk_evidence = []
+    if near_ma60_rebound:
+        positive_evidence.append("季線附近止跌反彈")
+        risk_evidence.append("尚未確認趨勢重新轉強")
+    if trend == "healthy_bull":
+        positive_evidence.append("主要均線維持多頭")
+    elif trend == "weak_bull":
+        risk_evidence.append("短線多頭轉弱")
+    elif trend == "bear":
+        risk_evidence.append("中期趨勢偏空")
+    if hist > 0 and hist >= hist_p:
+        positive_evidence.append("MACD動能改善")
+    elif hist < 0 and hist > hist_p:
+        positive_evidence.append("MACD負值收斂")
+        risk_evidence.append("MACD仍在空頭區")
+    elif hist < hist_p:
+        risk_evidence.append("MACD動能轉弱")
+    if inst_signal in ("strong_buy", "buy"):
+        positive_evidence.append("法人偏買")
+    elif inst_signal in ("strong_sell", "sell"):
+        risk_evidence.append("法人偏賣")
+    if kd_signal in ("golden_cross", "turning_up"):
+        positive_evidence.append("KD轉強")
+    elif kd_signal in ("death_cross", "turning_down"):
+        risk_evidence.append("KD轉弱")
+    if volume_signal == "price_up_volume_up":
+        positive_evidence.append("價漲量增")
+    elif volume_signal == "price_down_volume_up":
+        risk_evidence.append("價跌量增")
+    if obv_signal in ("rising", "leading"):
+        positive_evidence.append("OBV支撐")
+    elif obv_signal in ("falling", "divergence"):
+        risk_evidence.append("量價背離")
+    if fx_signal in ("risk", "mild_risk"):
+        risk_evidence.append("台幣轉弱壓抑外資風險偏好")
+    elif fx_signal in ("support", "mild_support"):
+        positive_evidence.append("台幣轉強支持資金面")
+    if rate_signal in ("risk", "mild_risk"):
+        risk_evidence.append("美債利率上行壓抑科技評價")
+    elif rate_signal in ("support", "mild_support"):
+        positive_evidence.append("美債利率下行支持估值修復")
+    if b60["locked"] or near_overheated:
+        risk_evidence.append("中期乖離偏高")
+    trade_context = {
+        "price_up": close > prev_close,
+        "positive_evidence": positive_evidence,
+        "risk_evidence": risk_evidence,
+        "ma60_dist": ma60_dist,
+        "recent_low_ma60_dist": recent_low_ma60_dist,
+    }
+
     if b60["locked"]:
         level_key, level_label = score_to_signal(effective_sell)
         level, emoji = f"OVERHEATED_{level_key}", "🔥"
@@ -1806,7 +1973,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
             "NEUTRAL": "賣出依據不足，繼續觀察",
         }[level_key]
 
-    trade_plan = build_trade_plan(level, regime, b60, lev_warn)
+    trade_plan = build_trade_plan(level, regime, b60, lev_warn, trade_context)
     pyramid = calc_pyramid(df, scfg, level)
     weekly = build_weekly_metrics(df, scfg, inst_week, regime, b60, effective_buy, effective_sell)
 
@@ -3034,6 +3201,191 @@ def save_social_report_pages(pages: list[str], today: str) -> list[Path]:
         paths.append(path)
     return paths
 
+
+def _public_signal_color(result: dict) -> str:
+    weekly = result.get("weekly", {})
+    return weekly.get("posture_color") or result.get("border") or NEUTRAL_COLOR
+
+
+def _public_action_text(result: dict) -> str:
+    plan = result.get("trade_plan", {})
+    headline = str(plan.get("headline") or "觀察")
+    return headline.replace("不交易，觀察", "觀察")
+
+
+def _public_news_items(news_items: list | None, limit: int = 4) -> str:
+    rows = ""
+    for item in (news_items or [])[:limit]:
+        title = html_lib.escape(_social_short_text(item.get("title", ""), 42))
+        note = html_lib.escape(_social_short_text(item.get("note", item.get("source", "")), 68))
+        date = html_lib.escape(str(item.get("date", "")))
+        rows += f"<div class='mini'><b>{title}</b><span>{date}｜{note}</span></div>"
+    if rows:
+        return rows
+    return "<div class='mini'><b>近期新聞</b><span>本週以價格、法人、匯率與利率資料作為主要判斷，新聞來源暫無高關聯摘要。</span></div>"
+
+
+def _public_event_items(event_items: list | None, today: str, limit: int = 4) -> str:
+    events = _social_events(event_items, today, limit)
+    if not events:
+        events = [{
+            "date": today,
+            "title": "自動重大事件掃描",
+            "note": "過去 5 天至未來 30 天內尚未掃描到高關聯重大事件。",
+            "impact": "中",
+        }]
+    rows = ""
+    for item in events[:limit]:
+        color = {"高": UP_COLOR, "中高": WARN_COLOR, "中": "#b8871b", "低": NEUTRAL_COLOR}.get(item.get("impact"), NEUTRAL_COLOR)
+        title = html_lib.escape(_social_short_text(item.get("title", ""), 40))
+        note = html_lib.escape(_social_short_text(item.get("note", ""), 70))
+        date = html_lib.escape(str(item.get("date", "")))
+        rows += f"<div class='mini event-mini' style='--c:{color}'><b>{title}</b><span>{date}｜{note}</span></div>"
+    return rows
+
+
+def _public_indicator_tiles(result: dict) -> str:
+    labels = [
+        ("季線支撐位置", "季線"),
+        ("BIAS60 Z-Score", "BIAS60"),
+        ("趨勢環境", "趨勢"),
+        ("本週三大法人", "法人"),
+        ("MACD", "MACD"),
+        ("KD", "KD"),
+        ("量能趨勢", "量能"),
+        ("OBV", "OBV"),
+    ]
+    tiles = ""
+    for label, title in labels:
+        value, color, note = _social_item_detail(result, label)
+        if value == "-" and label == "本週三大法人":
+            value, color, note = _social_item_detail(result, "三大法人")
+        tiles += (
+            f"<div class='radar-tile'>"
+            f"<div class='radar-label'>{html_lib.escape(title)}</div>"
+            f"<div class='radar-value' style='color:{color}'>{html_lib.escape(_social_short_text(value, 18))}</div>"
+            f"<div class='radar-note'>{html_lib.escape(_social_short_text(str(note).split('｜')[0], 34))}</div>"
+            f"</div>"
+        )
+    return tiles
+
+
+def build_public_report_html(results: list, today: str, cfg: dict | None = None,
+                             macro: dict | None = None, news_items: list | None = None,
+                             event_items: list | None = None) -> str:
+    date_text = today.replace("-", "/")
+    meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
+    market = results[0][2] if results else {}
+    market_weekly = market.get("weekly", {})
+    stock_results = sort_weekly_results(results, include_market=False)
+    market_chart = render_week_price_chart(market, 760, 230)
+    fx = macro.get("fx") if macro else None
+    rates = macro.get("rates") if macro else None
+    fx_value = f"{fx['value']:.3f}" if fx else "-"
+    rates_value = f"{rates['value']:.2f}%" if rates else "-"
+    inst_value_text = market_weekly.get("institutional_value_text") or format_twd_billion_short(market_weekly.get("institutional_value"))
+    inst_series = market_weekly.get("institutional_daily_values", [])
+    fx_series = fx.get("series", []) if fx else []
+    rates_series = rates.get("series", []) if rates else []
+    inst_note = macro_metric_note("institutional", market_weekly.get("institutional_value"), inst_series)
+    fx_note = macro_metric_note("fx", fx.get("value") if fx else None, fx_series)
+    rates_note = macro_metric_note("rates", rates.get("value") if rates else None, rates_series)
+
+    max_abs = max([abs(r.get("weekly", {}).get("week_chg_pct") or 0) for _n, _t, r in stock_results] + [1])
+    ranking = ""
+    for name, ticker, result in stock_results:
+        weekly = result.get("weekly", {})
+        chg = weekly.get("week_chg_pct") or 0
+        width = max(9, abs(chg) / max_abs * 100)
+        color = _pct_color(chg)
+        ranking += (
+            f"<div class='rank-row'><div class='rank-name'>{html_lib.escape(name)}</div>"
+            f"<div class='rank-track'><div class='rank-fill' style='--w:{width:.1f}%;--c:{color}'></div></div>"
+            f"<div class='rank-val' style='color:{color}'>{pct_text(chg)}</div></div>"
+        )
+
+    stock_cards = ""
+    for name, ticker, result in stock_results:
+        weekly = result.get("weekly", {})
+        color = _public_signal_color(result)
+        stock_cards += (
+            f"<div class='stock-card' style='--c:{color}'>"
+            f"<div class='stock-head'><div><b>{html_lib.escape(name)}</b><span>{ticker.replace('.TW','')}</span></div>"
+            f"<div class='lamp' style='background:{color}'></div></div>"
+            f"<div class='stock-line'><span>{html_lib.escape(weekly.get('posture','觀察'))}</span><strong style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</strong></div>"
+            f"<div class='stock-action'>{html_lib.escape(_public_action_text(result))}｜買{result.get('effective_buy',0):.0f} / 賣{result.get('effective_sell',0):.0f}</div>"
+            f"<p>{html_lib.escape(_social_short_text(result.get('trade_plan', {}).get('reason') or weekly.get('next_focus',''), 78))}</p>"
+            f"</div>"
+        )
+
+    detail_pages = []
+    for page_items in (stock_results[:4], stock_results[4:8]):
+        detail_blocks = ""
+        for name, ticker, result in page_items:
+            weekly = result.get("weekly", {})
+            color = _public_signal_color(result)
+            detail_blocks += (
+                f"<div class='detail-card' style='--c:{color}'>"
+                f"<div class='detail-top'><div><b>{html_lib.escape(name)}</b><span>{ticker.replace('.TW','')}｜{html_lib.escape(weekly.get('week_range_label',''))}</span></div>"
+                f"<div><strong>{result.get('close',0):.2f}</strong><em style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</em></div></div>"
+                f"<div class='detail-reason'>{html_lib.escape(_social_short_text(result.get('trade_plan', {}).get('reason') or weekly.get('next_focus',''), 118))}</div>"
+                f"<div class='radar-grid'>{_public_indicator_tiles(result)}</div>"
+                f"</div>"
+            )
+        detail_pages.append(detail_blocks)
+
+    css = f"""
+    <style>
+      @page {{ size: 900px 1260px; margin: 0; }}
+      *{{box-sizing:border-box}} body{{margin:0;background:{WEEKLY_BG};font-family:Arial,'Noto Sans TC',sans-serif;color:{WEEKLY_DARK}}}
+      .page{{width:900px;height:1260px;padding:32px 38px;background:{WEEKLY_BG};page-break-after:always;overflow:hidden}} .page:last-child{{page-break-after:auto}}
+      .top{{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:5px solid {WEEKLY_GOLD};padding-bottom:14px;margin-bottom:16px}}
+      .kicker{{font-size:13px;font-weight:900;color:#b8871b;letter-spacing:.12em}} h1{{font-size:34px;line-height:1.1;margin:5px 0 0;color:{WEEKLY_DARK}}}
+      .date{{font-size:15px;color:#6e746f;margin-top:6px}} .close{{text-align:right}} .close span{{display:block;color:#6e746f;font-size:14px}} .close b{{font-size:36px;line-height:1.1}} .close em{{display:block;font-style:normal;font-size:22px;font-weight:900}}
+      .panel{{background:#fffdf7;border:1px solid #ded4b8;border-radius:14px;padding:16px 18px;margin-bottom:14px}}
+      .headline{{display:grid;grid-template-columns:1.05fr .95fr;gap:16px;align-items:start}} .status{{font-size:31px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)}}}
+      .summary{{font-size:18px;line-height:1.55;color:#31423a;margin-top:8px}} .note{{font-size:14px;color:#59665f;background:#f7efdc;border-left:5px solid {WEEKLY_GOLD};padding:9px 10px;margin-top:9px}}
+      .metric-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}} .metric{{background:#f4edd9;border-radius:12px;padding:11px 12px;min-height:112px}} .metric span{{font-size:13px;color:#747d77}} .metric b{{display:block;font-size:22px;margin-top:3px}} .metric p{{font-size:12px;line-height:1.38;color:#5f6b64;margin:4px 0 0}}
+      h2{{font-size:24px;margin:0 0 10px;color:{WEEKLY_DARK}}} .twocol{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+      .mini{{background:#fbf7eb;border-radius:10px;padding:10px 12px;min-height:74px;border-left:5px solid #d4bf7a}} .event-mini{{border-left-color:var(--c)}} .mini b{{display:block;font-size:15px;line-height:1.28}} .mini span{{display:block;font-size:12px;color:#59665f;line-height:1.35;margin-top:5px}}
+      .rank-row{{display:grid;grid-template-columns:88px 1fr 72px;gap:10px;align-items:center;margin:9px 0}} .rank-name{{font-size:16px;font-weight:900}} .rank-track{{height:18px;background:#e8dfc8;border-radius:999px;overflow:hidden}} .rank-fill{{height:18px;width:var(--w);background:var(--c);border-radius:999px}} .rank-val{{font-size:16px;font-weight:900;text-align:right}}
+      .stock-grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px}} .stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:7px solid var(--c);border-radius:12px;padding:11px 12px;min-height:128px}} .stock-head{{display:flex;justify-content:space-between;gap:8px}} .stock-head b{{font-size:19px}} .stock-head span{{display:block;font-size:12px;color:#758078;margin-top:2px}} .lamp{{width:15px;height:15px;border-radius:50%;margin-top:4px}} .stock-line{{display:flex;justify-content:space-between;margin-top:7px;font-size:15px;font-weight:900}} .stock-action{{font-size:13px;color:#4d5c55;margin-top:6px}} .stock-card p{{font-size:12px;line-height:1.35;color:#59665f;margin:6px 0 0}}
+      .detail-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:8px solid var(--c);border-radius:13px;padding:13px 14px;margin-bottom:12px;min-height:273px}} .detail-top{{display:flex;justify-content:space-between;gap:12px}} .detail-top b{{font-size:22px}} .detail-top span{{display:block;color:#758078;font-size:12px;margin-top:2px}} .detail-top strong{{display:block;font-size:22px;text-align:right}} .detail-top em{{display:block;font-style:normal;text-align:right;font-weight:900;font-size:15px}} .detail-reason{{font-size:13px;line-height:1.45;color:#4d5c55;margin:8px 0 9px}}
+      .radar-grid{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px}} .radar-tile{{background:#f4edd9;border-radius:9px;padding:8px;min-height:72px}} .radar-label{{font-size:11px;color:#747d77}} .radar-value{{font-size:13px;font-weight:900;margin-top:2px;line-height:1.2}} .radar-note{{font-size:10px;color:#66736b;line-height:1.25;margin-top:3px}}
+      .footer{{font-size:11px;text-align:center;color:#8a806b;margin-top:7px}}
+    </style>
+    """
+
+    page1 = f"""
+    <div class='page'>
+      <div class='top'><div><div class='kicker'>WEEKLY MARKET BRIEF</div><h1>每週台股報告</h1><div class='date'>{date_text}｜{meta['week_label']}｜免費摘要版</div></div><div class='close'><span>加權指數收盤</span><b>{market.get('close',0):.2f}</b><em style='color:{_pct_color(market_weekly.get('week_chg_pct'))}'>{pct_text(market_weekly.get('week_chg_pct'))}</em></div></div>
+      <div class='panel headline'><div><div class='status'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='summary'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}</div><div class='note'>口徑：本週漲跌為週一開盤至週五收盤；週報偏向中大型權值股與中長線布局，不作為短線追價訊號。</div></div><div>{market_chart}</div></div>
+      <div class='panel'><h2>宏觀指標</h2><div class='metric-grid'><div class='metric'><span>法人週累計（金額）</span><b style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</b>{render_sparkline(inst_series, 170, 34)}<p>{html_lib.escape(_social_short_text(inst_note, 62))}</p></div><div class='metric'><span>美元/台幣</span><b>{fx_value}</b>{render_sparkline(fx_series, 170, 34)}<p>{html_lib.escape(_social_short_text(fx_note, 62))}</p></div><div class='metric'><span>美10年債</span><b>{rates_value}</b>{render_sparkline(rates_series, 170, 34)}<p>{html_lib.escape(_social_short_text(rates_note, 62))}</p></div></div></div>
+      <div class='panel'><h2>重大事件</h2><div class='twocol'>{_public_event_items(event_items, today, 4)}</div></div>
+      <div class='panel'><h2>重點新聞</h2><div class='twocol'>{_public_news_items(news_items, 4)}</div></div>
+      <div class='footer'>本報告由自動化模型產生，僅供參考，不構成投資建議。</div>
+    </div>"""
+    page2 = f"""
+    <div class='page'>
+      <div class='top'><div><div class='kicker'>LARGE CAP MAP</div><h1>權值股總覽</h1><div class='date'>{date_text}｜依本週漲跌排序</div></div></div>
+      <div class='panel'><h2>本週漲跌排名</h2>{ranking}</div>
+      <div class='panel'><h2>8 檔追蹤標的</h2><div class='stock-grid'>{stock_cards}</div></div>
+      <div class='footer'>信號燈為週報趨勢分層，買賣分數只代表模型強弱，不代表每日交易指令。</div>
+    </div>"""
+    page3 = f"""
+    <div class='page'>
+      <div class='top'><div><div class='kicker'>KEY INDICATORS</div><h1>個股關鍵指標 1</h1><div class='date'>{date_text}｜季線、BIAS60、法人、動能</div></div></div>
+      {detail_pages[0] if detail_pages else ''}
+      <div class='footer'>跌深反彈不等於趨勢反轉；週報以安全邊際與趨勢修復作為主要判斷。</div>
+    </div>"""
+    page4 = f"""
+    <div class='page'>
+      <div class='top'><div><div class='kicker'>KEY INDICATORS</div><h1>個股關鍵指標 2</h1><div class='date'>{date_text}｜量能、OBV、KD、MACD</div></div></div>
+      {detail_pages[1] if len(detail_pages) > 1 else ''}
+      <div class='footer'>同一弱訊號連續出現時，不建議每週重複操作；只有訊號升級或條件改變再重新評估。</div>
+    </div>"""
+    return f"<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body>{page1}{page2}{page3}{page4}</body></html>"
+
 # ── 本機 HTML 預覽 ───────────────────────────────────────────
 def save_email_preview(html: str) -> Path:
     preview_path = Path(__file__).parent / "email_preview.html"
@@ -3069,6 +3421,37 @@ def render_report_image(html_path: Path, today: str, cfg: dict, output_name: str
         return image_path
     except Exception as exc:
         print(f"⚠️  產生報告圖片失敗：{exc}")
+        return None
+
+
+def render_report_pdf(html_path: Path, output_name: str, prefer_css_page_size: bool = False) -> Path | None:
+    pdf_path = Path(__file__).parent / output_name
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        print(f"⚠️  未安裝 Playwright，跳過產生 PDF：{exc}")
+        return None
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(args=["--no-sandbox"])
+            page = browser.new_page(viewport={"width": 900, "height": 1260}, device_scale_factor=1)
+            page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
+            pdf_options = {
+                "path": str(pdf_path),
+                "print_background": True,
+                "prefer_css_page_size": prefer_css_page_size,
+            }
+            if not prefer_css_page_size:
+                pdf_options.update({
+                    "width": "900px",
+                    "margin": {"top": "0", "right": "0", "bottom": "0", "left": "0"},
+                })
+            page.pdf(**pdf_options)
+            browser.close()
+        return pdf_path
+    except Exception as exc:
+        print(f"⚠️  產生 PDF 失敗：{exc}")
         return None
 
 
@@ -3164,7 +3547,12 @@ def drive_file_exists(file_name: str, cfg: dict) -> bool:
     if not service:
         print("⚠️  無法檢查 Google Drive 既有檔案，繼續執行避免漏寄")
         return False
-    report_meta = get_report_meta(datetime.strptime(file_name[:8], "%Y%m%d").replace(tzinfo=TAIPEI_TZ))
+    date_match = re.search(r"(20\d{6})", file_name)
+    if date_match:
+        report_dt = datetime.strptime(date_match.group(1), "%Y%m%d").replace(tzinfo=TAIPEI_TZ)
+    else:
+        report_dt = datetime.now(TAIPEI_TZ)
+    report_meta = get_report_meta(report_dt)
     folder_id = get_drive_target_folder_id(service, cfg, report_meta, create=False)
     if not folder_id:
         return False
@@ -3246,8 +3634,144 @@ def upload_report_image_to_drive(image_path: Path, today: str, cfg: dict) -> str
         return None
 
 
+def upload_file_to_drive(file_path: Path, folder_id: str, mime_type: str,
+                         file_name: str | None = None, make_public: bool = False,
+                         file_id: str | None = None) -> dict | None:
+    try:
+        from googleapiclient.http import MediaFileUpload
+    except Exception as exc:
+        print(f"⚠️  未安裝 Google Drive API 套件，跳過上傳：{exc}")
+        return None
+
+    service, auth_mode = build_google_drive_service()
+    if not service:
+        print("⚠️  未設定 Google OAuth 憑證，已保留本機 PDF 但跳過上傳")
+        return None
+    name = file_name or file_path.name
+    try:
+        print(f"使用 Google Drive {auth_mode} 憑證上傳 PDF")
+        media = MediaFileUpload(str(file_path), mimetype=mime_type, resumable=False)
+        target = None
+        if file_id:
+            try:
+                target = service.files().get(
+                    fileId=file_id,
+                    fields="id,name,webViewLink",
+                    supportsAllDrives=True,
+                ).execute()
+            except Exception as exc:
+                print(f"⚠️  固定 file_id 無法讀取，改用檔名搜尋：{exc}")
+        if not target:
+            query = (
+                f"'{folder_id}' in parents and "
+                f"name = '{_drive_name_query(name)}' and "
+                "trashed = false"
+            )
+            existing = service.files().list(
+                q=query,
+                fields="files(id,name,webViewLink)",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute().get("files", [])
+            target = existing[0] if existing else None
+
+        if target:
+            uploaded = service.files().update(
+                fileId=target["id"],
+                media_body=media,
+                fields="id,name,webViewLink",
+                supportsAllDrives=True,
+            ).execute()
+            print(f"已更新 Google Drive PDF：{uploaded.get('name')}｜file_id={uploaded.get('id')}")
+        else:
+            uploaded = service.files().create(
+                body={"name": name, "parents": [folder_id]},
+                media_body=media,
+                fields="id,name,webViewLink",
+                supportsAllDrives=True,
+            ).execute()
+            print(f"已建立 Google Drive PDF：{uploaded.get('name')}｜file_id={uploaded.get('id')}")
+
+        if make_public:
+            try:
+                service.permissions().create(
+                    fileId=uploaded["id"],
+                    body={"type": "anyone", "role": "reader"},
+                    supportsAllDrives=True,
+                ).execute()
+            except Exception as exc:
+                print(f"⚠️  設定公開讀取失敗，請確認 Drive 權限：{exc}")
+        return uploaded
+    except Exception as exc:
+        print(f"⚠️  上傳 Google Drive PDF 失敗：{exc}")
+        return None
+
+
+def upload_report_file_to_drive(file_path: Path, today: str, cfg: dict,
+                                file_name: str | None = None,
+                                mime_type: str = "application/pdf") -> str | None:
+    drive_cfg = cfg.get("drive_report", {})
+    if not drive_cfg.get("enabled", False):
+        return None
+    service, _auth_mode = build_google_drive_service()
+    if not service:
+        print("⚠️  未設定 Google OAuth 憑證，已保留本機備份 PDF 但跳過上傳")
+        return None
+    report_meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
+    folder_id = get_drive_target_folder_id(service, cfg, report_meta, create=True)
+    if not folder_id:
+        print("⚠️  未設定 Google Drive 備份 folder_id，跳過上傳備份 PDF")
+        return None
+    uploaded = upload_file_to_drive(file_path, folder_id, mime_type, file_name=file_name or file_path.name)
+    return uploaded.get("webViewLink") if uploaded else None
+
+
+def save_public_report_file(html: str, today: str, cfg: dict) -> Path | None:
+    public_cfg = cfg.get("public_report", {})
+    if not public_cfg.get("enabled", False):
+        return None
+    out_dir = Path(__file__).parent / "public_report"
+    out_dir.mkdir(exist_ok=True)
+    html_path = out_dir / "public_report_preview.html"
+    html_path.write_text(html, encoding="utf-8")
+    fixed_name = public_cfg.get("fixed_file_name", "每週台股報告.pdf")
+    pdf_path = render_report_pdf(html_path, str(Path("public_report") / fixed_name), prefer_css_page_size=True)
+    if pdf_path:
+        print(f"已產生免費版 PDF：{pdf_path}")
+    return pdf_path
+
+
+def upload_public_report_file(file_path: Path | None, cfg: dict) -> str | None:
+    if not file_path:
+        return None
+    public_cfg = cfg.get("public_report", {})
+    if not public_cfg.get("enabled", False):
+        return None
+    folder_id = (
+        os.environ.get("PUBLIC_REPORT_DRIVE_FOLDER_ID")
+        or os.environ.get("WEEKLY_PUBLIC_REPORT_DRIVE_FOLDER_ID")
+        or public_cfg.get("folder_id")
+    )
+    if not folder_id:
+        print("⚠️  未設定免費版 Google Drive folder_id，跳過上傳固定 PDF")
+        return None
+    file_id = os.environ.get("PUBLIC_REPORT_DRIVE_FILE_ID") or public_cfg.get("fixed_file_id") or ""
+    uploaded = upload_file_to_drive(
+        file_path,
+        folder_id,
+        "application/pdf",
+        file_name=public_cfg.get("fixed_file_name", "每週台股報告.pdf"),
+        make_public=bool(public_cfg.get("make_public", True)),
+        file_id=file_id.strip() or None,
+    )
+    return uploaded.get("webViewLink") if uploaded else None
+
+
 # ── 發送 Email ───────────────────────────────────────────────
 def send_email(cfg: dict, html: str, today: str) -> bool:
+    if not cfg.get("email", {}).get("enabled", False):
+        print("Email 發送已關閉，略過寄信")
+        return False
     smtp_user = os.environ.get("SMTP_USERNAME", "").strip()
     smtp_pass = os.environ.get("SMTP_PASSWORD", "").strip()
     report_to = os.environ.get("REPORT_EMAIL_TO", "").strip()
@@ -3279,8 +3803,12 @@ def main():
     now_tw = datetime.now(TAIPEI_TZ)
     report_meta = get_report_meta(now_tw)
     today = report_meta["date"]
+    force_run = os.environ.get("FORCE_RUN_REPORT", "").strip().lower() in ("1", "true", "yes", "y")
     print(f"[{now_tw.strftime('%Y-%m-%d %H:%M')}] 開始每週趨勢分析，共 {len(cfg['watchlist'])} 檔")
-    if drive_file_exists(f"{report_meta['date_key']}_week{report_meta['week']}_01.png", cfg):
+    if force_run:
+        print("  force_run=true，忽略同週既有檔案檢查，強制重新產生並更新 PDF")
+    backup_pdf_name = f"每週台股報告_{report_meta['date_key']}.pdf"
+    if not force_run and drive_file_exists(backup_pdf_name, cfg):
         return
 
     macro = fetch_market_context()
@@ -3341,33 +3869,42 @@ def main():
     event_items = fetch_auto_market_events(cfg, today)
     print(f"  自動重大事件掃描：取得 {len(event_items)} 則高關聯事件")
 
-    if drive_file_exists(f"{report_meta['date_key']}_week{report_meta['week']}_01.png", cfg):
+    backup_pdf_name = f"每週台股報告_{report_meta['date_key']}.pdf"
+    if not force_run and drive_file_exists(backup_pdf_name, cfg):
         return
 
     html = build_email_html(results, today, cfg, macro, news_items, event_items)
     preview_path = save_email_preview(html)
     print(f"\n已產生 Email 預覽：{preview_path}")
 
-    print(f"\n發送 Email 至 {cfg['email']['to']} ...")
-    try:
-        if send_email(cfg, html, today):
-            print("✅ Email 發送成功")
-    except Exception as e:
-        print(f"❌ Email 失敗：{e}")
+    if cfg.get("email", {}).get("enabled", False):
+        print("\nEmail 設定啟用，準備發送 ...")
+        try:
+            if send_email(cfg, html, today):
+                print("✅ Email 發送成功")
+        except Exception as e:
+            print(f"❌ Email 失敗：{e}")
+    else:
+        print("\nEmail 發送已關閉，本週報告不依賴 SMTP secrets")
 
-    social_pages = save_social_report_pages(
-        build_social_report_pages(results, today, cfg, macro, news_items, event_items), today
-    )
-    for idx, social_page in enumerate(social_pages, start=1):
-        image_name = f"{report_meta['date_key']}_week{report_meta['week']}_{idx:02d}.png"
-        image_path = render_report_image(
-            social_page, today, cfg, output_name=image_name, full_page=False, height=1920
+    public_html = build_public_report_html(results, today, cfg, macro, news_items, event_items)
+    public_pdf_path = save_public_report_file(public_html, today, cfg)
+    public_link = upload_public_report_file(public_pdf_path, cfg)
+    if public_link:
+        print(f"已上傳或更新免費版固定 PDF：{public_link}")
+
+    backup_pdf_path = render_report_pdf(preview_path, backup_pdf_name, prefer_css_page_size=False)
+    if backup_pdf_path:
+        print(f"已產生自用備份 PDF：{backup_pdf_path}")
+        backup_link = upload_report_file_to_drive(
+            backup_pdf_path,
+            today,
+            cfg,
+            file_name=backup_pdf_name,
+            mime_type="application/pdf",
         )
-        if image_path:
-            print(f"已產生社群分享圖片：{image_path}")
-            drive_link = upload_report_image_to_drive(image_path, today, cfg)
-            if drive_link:
-                print(f"已上傳社群分享圖片至 Google Drive：{drive_link}")
+        if backup_link:
+            print(f"已上傳或更新自用備份 PDF：{backup_link}")
 
 
 
