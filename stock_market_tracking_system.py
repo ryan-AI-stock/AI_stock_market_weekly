@@ -3493,6 +3493,9 @@ def _build_google_drive_credentials():
             credentials.refresh(Request())
             return credentials, "OAuth"
         except Exception as exc:
+            msg = str(exc)
+            if "invalid_grant" in msg or "expired" in msg.lower() or "revoked" in msg.lower():
+                print("⚠️  Google OAuth refresh token 已失效或被撤銷，請重新授權並更新 GitHub secret GOOGLE_OAUTH_REFRESH_TOKEN")
             print(f"⚠️  Google OAuth 憑證失敗：{exc}")
 
     return None, ""
@@ -3785,6 +3788,22 @@ def upload_public_report_file(file_path: Path | None, cfg: dict) -> str | None:
     return uploaded.get("webViewLink") if uploaded else None
 
 
+def _is_github_actions() -> bool:
+    return os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true"
+
+
+def _email_disabled(cfg: dict) -> bool:
+    return not cfg.get("email", {}).get("enabled", True)
+
+
+def _handle_drive_publish_failure(cfg: dict, msg: str) -> None:
+    print(f"❌ {msg}")
+    if _is_github_actions() and _email_disabled(cfg):
+        print("❌ Google Drive 是目前正式發布渠道，發布失敗，GitHub Actions 將中止流程")
+        raise RuntimeError(msg)
+    print("⚠️  本機或 Email 未關閉情境：保留本機產出檔，略過 Google Drive 上傳")
+
+
 # ── 發送 Email ───────────────────────────────────────────────
 def send_email(cfg: dict, html: str, today: str) -> bool:
     if not cfg.get("email", {}).get("enabled", False):
@@ -3910,6 +3929,11 @@ def main():
     public_link = upload_public_report_file(public_pdf_path, cfg)
     if public_link:
         print(f"已上傳或更新免費版固定 PDF：{public_link}")
+    elif _email_disabled(cfg) and cfg.get("public_report", {}).get("enabled", False):
+        _handle_drive_publish_failure(
+            cfg,
+            "Email 已關閉，但免費觀眾 Google Drive PDF 上傳失敗，發布流程中止",
+        )
 
     public_preview_path = Path(__file__).parent / "public_report" / "public_report_preview.html"
     backup_pdf_path = render_report_pdf(public_preview_path, backup_pdf_name, prefer_css_page_size=True)
@@ -3924,6 +3948,16 @@ def main():
         )
         if backup_link:
             print(f"已上傳或更新自用備份 PDF：{backup_link}")
+        elif _email_disabled(cfg) and cfg.get("drive_report", {}).get("enabled", False):
+            _handle_drive_publish_failure(
+                cfg,
+                "Email 已關閉，但自用備份 Google Drive PDF 上傳失敗，發布流程中止",
+            )
+    elif _email_disabled(cfg) and cfg.get("drive_report", {}).get("enabled", False):
+        _handle_drive_publish_failure(
+            cfg,
+            "Email 已關閉，但自用備份 PDF 產生失敗，發布流程中止",
+        )
 
 
 
