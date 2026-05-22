@@ -3277,8 +3277,9 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
     meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
     market = results[0][2] if results else {}
     market_weekly = market.get("weekly", {})
+    tracked_results = sort_weekly_results(results, include_market=True)
     stock_results = sort_weekly_results(results, include_market=False)
-    market_chart = render_week_price_chart(market, 760, 230)
+    market_chart = render_week_price_chart(market, 790, 250)
     fx = macro.get("fx") if macro else None
     rates = macro.get("rates") if macro else None
     fx_value = f"{fx['value']:.3f}" if fx else "-"
@@ -3293,7 +3294,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
 
     max_abs = max([abs(r.get("weekly", {}).get("week_chg_pct") or 0) for _n, _t, r in stock_results] + [1])
     ranking = ""
-    for name, ticker, result in stock_results:
+    for name, ticker, result in tracked_results:
         weekly = result.get("weekly", {})
         chg = weekly.get("week_chg_pct") or 0
         width = max(9, abs(chg) / max_abs * 100)
@@ -3319,7 +3320,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
         )
 
     detail_pages = []
-    for page_items in (stock_results[:4], stock_results[4:8]):
+    for page_items in (tracked_results[:4], tracked_results[4:8]):
         detail_blocks = ""
         for name, ticker, result in page_items:
             weekly = result.get("weekly", {})
@@ -3338,20 +3339,20 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
     <style>
       @page {{ size: 900px 1260px; margin: 0; }}
       *{{box-sizing:border-box}} body{{margin:0;background:{WEEKLY_BG};font-family:Arial,'Noto Sans TC',sans-serif;color:{WEEKLY_DARK}}}
-      .page{{width:900px;height:1260px;padding:32px 38px;background:{WEEKLY_BG};page-break-after:always;overflow:hidden}} .page:last-child{{page-break-after:auto}}
-      .top{{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:5px solid {WEEKLY_GOLD};padding-bottom:14px;margin-bottom:16px}}
-      .kicker{{font-size:13px;font-weight:900;color:#b8871b;letter-spacing:.12em}} h1{{font-size:34px;line-height:1.1;margin:5px 0 0;color:{WEEKLY_DARK}}}
-      .date{{font-size:15px;color:#6e746f;margin-top:6px}} .close{{text-align:right}} .close span{{display:block;color:#6e746f;font-size:14px}} .close b{{font-size:36px;line-height:1.1}} .close em{{display:block;font-style:normal;font-size:22px;font-weight:900}}
-      .panel{{background:#fffdf7;border:1px solid #ded4b8;border-radius:14px;padding:16px 18px;margin-bottom:14px}}
-      .headline{{display:grid;grid-template-columns:1.05fr .95fr;gap:16px;align-items:start}} .status{{font-size:31px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)}}}
-      .summary{{font-size:18px;line-height:1.55;color:#31423a;margin-top:8px}} .note{{font-size:14px;color:#59665f;background:#f7efdc;border-left:5px solid {WEEKLY_GOLD};padding:9px 10px;margin-top:9px}}
-      .metric-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}} .metric{{background:#f4edd9;border-radius:12px;padding:11px 12px;min-height:112px}} .metric span{{font-size:13px;color:#747d77}} .metric b{{display:block;font-size:22px;margin-top:3px}} .metric p{{font-size:12px;line-height:1.38;color:#5f6b64;margin:4px 0 0}}
-      h2{{font-size:24px;margin:0 0 10px;color:{WEEKLY_DARK}}} .twocol{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
-      .mini{{background:#fbf7eb;border-radius:10px;padding:10px 12px;min-height:74px;border-left:5px solid #d4bf7a}} .event-mini{{border-left-color:var(--c)}} .mini b{{display:block;font-size:15px;line-height:1.28}} .mini span{{display:block;font-size:12px;color:#59665f;line-height:1.35;margin-top:5px}}
-      .rank-row{{display:grid;grid-template-columns:88px 1fr 72px;gap:10px;align-items:center;margin:9px 0}} .rank-name{{font-size:16px;font-weight:900}} .rank-track{{height:18px;background:#e8dfc8;border-radius:999px;overflow:hidden}} .rank-fill{{height:18px;width:var(--w);background:var(--c);border-radius:999px}} .rank-val{{font-size:16px;font-weight:900;text-align:right}}
-      .stock-grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px}} .stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:7px solid var(--c);border-radius:12px;padding:11px 12px;min-height:128px}} .stock-head{{display:flex;justify-content:space-between;gap:8px}} .stock-head b{{font-size:19px}} .stock-head span{{display:block;font-size:12px;color:#758078;margin-top:2px}} .lamp{{width:15px;height:15px;border-radius:50%;margin-top:4px}} .stock-line{{display:flex;justify-content:space-between;margin-top:7px;font-size:15px;font-weight:900}} .stock-action{{font-size:13px;color:#4d5c55;margin-top:6px}} .stock-card p{{font-size:12px;line-height:1.35;color:#59665f;margin:6px 0 0}}
-      .detail-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:8px solid var(--c);border-radius:13px;padding:13px 14px;margin-bottom:12px;min-height:273px}} .detail-top{{display:flex;justify-content:space-between;gap:12px}} .detail-top b{{font-size:22px}} .detail-top span{{display:block;color:#758078;font-size:12px;margin-top:2px}} .detail-top strong{{display:block;font-size:22px;text-align:right}} .detail-top em{{display:block;font-style:normal;text-align:right;font-weight:900;font-size:15px}} .detail-reason{{font-size:13px;line-height:1.45;color:#4d5c55;margin:8px 0 9px}}
-      .radar-grid{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px}} .radar-tile{{background:#f4edd9;border-radius:9px;padding:8px;min-height:72px}} .radar-label{{font-size:11px;color:#747d77}} .radar-value{{font-size:13px;font-weight:900;margin-top:2px;line-height:1.2}} .radar-note{{font-size:10px;color:#66736b;line-height:1.25;margin-top:3px}}
+      .page{{width:900px;height:1260px;padding:28px 34px;background:{WEEKLY_BG};page-break-after:always;overflow:hidden}} .page:last-child{{page-break-after:auto}}
+      .top{{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:5px solid {WEEKLY_GOLD};padding-bottom:12px;margin-bottom:12px}}
+      .kicker{{font-size:12px;font-weight:900;color:#b8871b;letter-spacing:.12em}} h1{{font-size:32px;line-height:1.08;margin:4px 0 0;color:{WEEKLY_DARK}}}
+      .date{{font-size:14px;color:#6e746f;margin-top:5px}} .close{{text-align:right}} .close span{{display:block;color:#6e746f;font-size:13px}} .close b{{font-size:34px;line-height:1.05}} .close em{{display:block;font-style:normal;font-size:21px;font-weight:900}}
+      .panel{{background:#fffdf7;border:1px solid #ded4b8;border-radius:13px;padding:13px 15px;margin-bottom:11px}}
+      .market-hero{{display:grid;grid-template-columns:190px 1fr;gap:16px;align-items:stretch}} .status{{font-size:34px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)};line-height:1.05}} .summary{{font-size:16px;line-height:1.48;color:#31423a}} .note{{font-size:12px;color:#59665f;background:#f7efdc;border-left:5px solid {WEEKLY_GOLD};padding:7px 9px;margin-top:7px}}
+      .chart-wrap{{padding:8px 10px 6px}} .chart-wrap svg{{display:block;max-width:100%;height:auto}} .page1-grid{{display:grid;grid-template-columns:1fr 1fr;gap:11px}}
+      .metric-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}} .metric{{background:#f4edd9;border-radius:11px;padding:10px 11px;min-height:104px}} .metric span{{font-size:12px;color:#747d77}} .metric b{{display:block;font-size:21px;margin-top:2px}} .metric p{{font-size:11px;line-height:1.32;color:#5f6b64;margin:3px 0 0}}
+      h2{{font-size:22px;margin:0 0 8px;color:{WEEKLY_DARK}}} .twocol{{display:grid;grid-template-columns:1fr 1fr;gap:9px}} .page1-grid .twocol{{grid-template-columns:1fr;gap:7px}}
+      .mini{{background:#fbf7eb;border-radius:9px;padding:8px 10px;min-height:67px;border-left:5px solid #d4bf7a}} .event-mini{{border-left-color:var(--c)}} .mini b{{display:block;font-size:13px;line-height:1.25}} .mini span{{display:block;font-size:11px;color:#59665f;line-height:1.3;margin-top:4px}}
+      .rank-row{{display:grid;grid-template-columns:88px 1fr 72px;gap:10px;align-items:center;margin:8px 0}} .rank-name{{font-size:16px;font-weight:900}} .rank-track{{height:17px;background:#e8dfc8;border-radius:999px;overflow:hidden}} .rank-fill{{height:17px;width:var(--w);background:var(--c);border-radius:999px}} .rank-val{{font-size:16px;font-weight:900;text-align:right}}
+      .stock-grid{{display:grid;grid-template-columns:1fr 1fr;gap:9px}} .stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:7px solid var(--c);border-radius:11px;padding:10px 11px;min-height:120px}} .stock-head{{display:flex;justify-content:space-between;gap:8px}} .stock-head b{{font-size:18px}} .stock-head span{{display:block;font-size:11px;color:#758078;margin-top:1px}} .lamp{{width:14px;height:14px;border-radius:50%;margin-top:4px}} .stock-line{{display:flex;justify-content:space-between;margin-top:6px;font-size:14px;font-weight:900}} .stock-action{{font-size:12px;color:#4d5c55;margin-top:5px}} .stock-card p{{font-size:11px;line-height:1.32;color:#59665f;margin:5px 0 0}}
+      .detail-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:8px solid var(--c);border-radius:12px;padding:11px 13px;margin-bottom:10px;min-height:262px}} .detail-top{{display:flex;justify-content:space-between;gap:12px}} .detail-top b{{font-size:21px}} .detail-top span{{display:block;color:#758078;font-size:11px;margin-top:2px}} .detail-top strong{{display:block;font-size:21px;text-align:right}} .detail-top em{{display:block;font-style:normal;text-align:right;font-weight:900;font-size:14px}} .detail-reason{{font-size:12px;line-height:1.4;color:#4d5c55;margin:7px 0 8px}}
+      .radar-grid{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}} .radar-tile{{background:#f4edd9;border-radius:8px;padding:7px;min-height:68px}} .radar-label{{font-size:10px;color:#747d77}} .radar-value{{font-size:12px;font-weight:900;margin-top:2px;line-height:1.2}} .radar-note{{font-size:9px;color:#66736b;line-height:1.22;margin-top:3px}}
       .footer{{font-size:11px;text-align:center;color:#8a806b;margin-top:7px}}
     </style>
     """
@@ -3359,10 +3360,11 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
     page1 = f"""
     <div class='page'>
       <div class='top'><div><div class='kicker'>WEEKLY MARKET BRIEF</div><h1>每週台股報告</h1><div class='date'>{date_text}｜{meta['week_label']}｜免費摘要版</div></div><div class='close'><span>加權指數收盤</span><b>{market.get('close',0):.2f}</b><em style='color:{_pct_color(market_weekly.get('week_chg_pct'))}'>{pct_text(market_weekly.get('week_chg_pct'))}</em></div></div>
-      <div class='panel headline'><div><div class='status'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='summary'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}</div><div class='note'>口徑：本週漲跌為週一開盤至週五收盤；週報偏向中大型權值股與中長線布局，不作為短線追價訊號。</div></div><div>{market_chart}</div></div>
+      <div class='panel market-hero'><div><div class='status'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='note'>週報偏向中大型權值股與中長線布局，不作為短線追價訊號。</div></div><div class='summary'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}<div class='note'>口徑：本週漲跌為週一開盤至週五收盤；相對上週五用於觀察跳空與週線連續性。</div></div></div>
+      <div class='panel chart-wrap'>{market_chart}</div>
       <div class='panel'><h2>宏觀指標</h2><div class='metric-grid'><div class='metric'><span>法人週累計（金額）</span><b style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</b>{render_sparkline(inst_series, 170, 34)}<p>{html_lib.escape(_social_short_text(inst_note, 62))}</p></div><div class='metric'><span>美元/台幣</span><b>{fx_value}</b>{render_sparkline(fx_series, 170, 34)}<p>{html_lib.escape(_social_short_text(fx_note, 62))}</p></div><div class='metric'><span>美10年債</span><b>{rates_value}</b>{render_sparkline(rates_series, 170, 34)}<p>{html_lib.escape(_social_short_text(rates_note, 62))}</p></div></div></div>
-      <div class='panel'><h2>重大事件</h2><div class='twocol'>{_public_event_items(event_items, today, 4)}</div></div>
-      <div class='panel'><h2>重點新聞</h2><div class='twocol'>{_public_news_items(news_items, 4)}</div></div>
+      <div class='page1-grid'><div class='panel'><h2>重大事件</h2><div class='twocol'>{_public_event_items(event_items, today, 4)}</div></div>
+      <div class='panel'><h2>重點新聞</h2><div class='twocol'>{_public_news_items(news_items, 4)}</div></div></div>
       <div class='footer'>本報告由自動化模型產生，僅供參考，不構成投資建議。</div>
     </div>"""
     page2 = f"""
@@ -3893,7 +3895,8 @@ def main():
     if public_link:
         print(f"已上傳或更新免費版固定 PDF：{public_link}")
 
-    backup_pdf_path = render_report_pdf(preview_path, backup_pdf_name, prefer_css_page_size=False)
+    public_preview_path = Path(__file__).parent / "public_report" / "public_report_preview.html"
+    backup_pdf_path = render_report_pdf(public_preview_path, backup_pdf_name, prefer_css_page_size=True)
     if backup_pdf_path:
         print(f"已產生自用備份 PDF：{backup_pdf_path}")
         backup_link = upload_report_file_to_drive(
