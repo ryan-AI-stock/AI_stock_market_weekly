@@ -12,7 +12,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import quote_plus
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -516,7 +516,22 @@ def _fetch_twse_index_data(start_date, end_date) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"]).drop_duplicates("Date")
     return df.set_index("Date").sort_index()
 
-def _is_fresh_price_data(df: pd.DataFrame, end_date, max_stale_days: int = 7) -> bool:
+def _expected_latest_price_date(now: datetime | None = None):
+    dt = now or datetime.now(TAIPEI_TZ)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TAIPEI_TZ)
+    day = dt.date()
+    if day.weekday() >= 5:
+        return day - timedelta(days=day.weekday() - 4)
+    if dt.time() >= time(13, 40):
+        return day
+    previous = day - timedelta(days=1)
+    while previous.weekday() >= 5:
+        previous -= timedelta(days=1)
+    return previous
+
+
+def _is_fresh_price_data(df: pd.DataFrame, end_date, max_stale_days: int = 0) -> bool:
     if df is None or df.empty:
         return False
     latest = _date_only(df.index[-1])
@@ -526,7 +541,8 @@ def _is_fresh_price_data(df: pd.DataFrame, end_date, max_stale_days: int = 7) ->
 
 def fetch_data(ticker: str, days: int) -> pd.DataFrame:
     # 台股價格優先用證交所官方日資料，避免 yfinance 調整價或暫存造成收盤價失真。
-    end = datetime.now(TAIPEI_TZ).date()
+    now_tw = datetime.now(TAIPEI_TZ)
+    end = _expected_latest_price_date(now_tw)
     start = end - timedelta(days=days)
     stock_id = ticker.upper().replace(".TW", "").replace(".TWO", "")
     try:
@@ -541,12 +557,12 @@ def fetch_data(ticker: str, days: int) -> pd.DataFrame:
             if _is_fresh_price_data(twse_df, end):
                 return twse_df
             latest = twse_df.index[-1].strftime("%Y-%m-%d")
-            print(f"⚠️  證交所官方價格資料過舊：{ticker} 最新僅到 {latest}，改用 yfinance 備援")
+            print(f"⚠️  證交所官方價格資料過舊：{ticker} 最新僅到 {latest}，預期至少 {end}，改用 yfinance 備援")
     except Exception as exc:
         print(f"⚠️  證交所官方價格資料失敗，改用 yfinance 備援：{ticker} {str(exc)[:80]}")
 
     # yfinance 的 end 是「不含當日」的結束日期；收盤後要抓到今天資料，必須設成台灣明天。
-    yf_end = datetime.now(TAIPEI_TZ).date() + timedelta(days=1)
+    yf_end = end + timedelta(days=1)
     yf_start = yf_end - timedelta(days=days)
     df = yf.download(ticker,
                      start=yf_start.strftime("%Y-%m-%d"),
@@ -556,9 +572,9 @@ def fetch_data(ticker: str, days: int) -> pd.DataFrame:
         raise ValueError(f"無法取得 {ticker} 資料")
     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
     df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-    if not _is_fresh_price_data(df, datetime.now(TAIPEI_TZ).date()):
+    if not _is_fresh_price_data(df, end):
         latest = df.index[-1].strftime("%Y-%m-%d")
-        raise ValueError(f"{ticker} 價格資料過舊，最新僅到 {latest}")
+        raise ValueError(f"{ticker} 價格資料過舊，最新僅到 {latest}，預期至少 {end}")
     return df
 
 
@@ -3312,7 +3328,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
         stock_cards += (
             f"<div class='stock-card' style='--c:{color}'>"
             f"<div class='stock-head'><div><b>{html_lib.escape(name)}</b><span>{ticker.replace('.TW','')}</span></div>"
-            f"<div class='lamp' style='background:{color}'></div></div>"
+            f"<div class='signal-badge'><span></span></div></div>"
             f"<div class='stock-line'><span>{html_lib.escape(weekly.get('posture','觀察'))}</span><strong style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</strong></div>"
             f"<div class='stock-action'>{html_lib.escape(_public_action_text(result))}｜買{result.get('effective_buy',0):.0f} / 賣{result.get('effective_sell',0):.0f}</div>"
             f"<p>{html_lib.escape(_social_short_text(result.get('trade_plan', {}).get('reason') or weekly.get('next_focus',''), 78))}</p>"
@@ -3349,8 +3365,8 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
       .metric-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}} .metric{{background:#f4edd9;border-radius:11px;padding:10px 11px;min-height:104px}} .metric span{{font-size:12px;color:#747d77}} .metric b{{display:block;font-size:21px;margin-top:2px}} .metric p{{font-size:11px;line-height:1.32;color:#5f6b64;margin:3px 0 0}}
       h2{{font-size:22px;margin:0 0 8px;color:{WEEKLY_DARK}}} .twocol{{display:grid;grid-template-columns:1fr 1fr;gap:9px}} .page1-grid .twocol{{grid-template-columns:1fr;gap:7px}}
       .mini{{background:#fbf7eb;border-radius:9px;padding:8px 10px;min-height:67px;border-left:5px solid #d4bf7a}} .event-mini{{border-left-color:var(--c)}} .mini b{{display:block;font-size:13px;line-height:1.25}} .mini span{{display:block;font-size:11px;color:#59665f;line-height:1.3;margin-top:4px}}
-      .rank-row{{display:grid;grid-template-columns:88px 1fr 72px;gap:10px;align-items:center;margin:8px 0}} .rank-name{{font-size:16px;font-weight:900}} .rank-track{{height:17px;background:#e8dfc8;border-radius:999px;overflow:hidden}} .rank-fill{{height:17px;width:var(--w);background:var(--c);border-radius:999px}} .rank-val{{font-size:16px;font-weight:900;text-align:right}}
-      .stock-grid{{display:grid;grid-template-columns:1fr 1fr;gap:9px}} .stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:7px solid var(--c);border-radius:11px;padding:10px 11px;min-height:120px}} .stock-head{{display:flex;justify-content:space-between;gap:8px}} .stock-head b{{font-size:18px}} .stock-head span{{display:block;font-size:11px;color:#758078;margin-top:1px}} .lamp{{width:14px;height:14px;border-radius:50%;margin-top:4px}} .stock-line{{display:flex;justify-content:space-between;margin-top:6px;font-size:14px;font-weight:900}} .stock-action{{font-size:12px;color:#4d5c55;margin-top:5px}} .stock-card p{{font-size:11px;line-height:1.32;color:#59665f;margin:5px 0 0}}
+      .rank-row{{display:grid;grid-template-columns:126px 1fr 72px;gap:10px;align-items:center;margin:8px 0}} .rank-name{{font-size:15px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}} .rank-track{{height:17px;background:#e8dfc8;border-radius:999px;overflow:hidden}} .rank-fill{{height:17px;width:var(--w);background:var(--c);border-radius:999px}} .rank-val{{font-size:16px;font-weight:900;text-align:right}}
+      .stock-grid{{display:grid;grid-template-columns:1fr 1fr;gap:9px}} .stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:7px solid var(--c);border-radius:11px;padding:10px 11px;min-height:120px}} .stock-head{{display:flex;justify-content:space-between;gap:8px}} .stock-head b{{font-size:18px}} .stock-head span{{display:block;font-size:11px;color:#758078;margin-top:1px}} .signal-badge{{width:38px;height:22px;border-radius:999px;padding:3px;background:linear-gradient(180deg,#fffaf0,#eee4ca);border:1px solid #d8cda9;box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 6px rgba(18,50,43,.10);flex:0 0 auto}} .signal-badge span{{display:block;width:14px;height:14px;border-radius:50%;background:var(--c);box-shadow:0 0 0 3px rgba(255,255,255,.75),0 1px 4px rgba(18,50,43,.25)}} .stock-line{{display:flex;justify-content:space-between;margin-top:6px;font-size:14px;font-weight:900}} .stock-action{{font-size:12px;color:#4d5c55;margin-top:5px}} .stock-card p{{font-size:11px;line-height:1.32;color:#59665f;margin:5px 0 0}}
       .detail-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:8px solid var(--c);border-radius:12px;padding:11px 13px;margin-bottom:10px;min-height:262px}} .detail-top{{display:flex;justify-content:space-between;gap:12px}} .detail-top b{{font-size:21px}} .detail-top span{{display:block;color:#758078;font-size:11px;margin-top:2px}} .detail-top strong{{display:block;font-size:21px;text-align:right}} .detail-top em{{display:block;font-style:normal;text-align:right;font-weight:900;font-size:14px}} .detail-reason{{font-size:12px;line-height:1.4;color:#4d5c55;margin:7px 0 8px}}
       .radar-grid{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}} .radar-tile{{background:#f4edd9;border-radius:8px;padding:7px;min-height:68px}} .radar-label{{font-size:10px;color:#747d77}} .radar-value{{font-size:12px;font-weight:900;margin-top:2px;line-height:1.2}} .radar-note{{font-size:9px;color:#66736b;line-height:1.22;margin-top:3px}}
       .footer{{font-size:11px;text-align:center;color:#8a806b;margin-top:7px}}
@@ -3376,13 +3392,13 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
     </div>"""
     page3 = f"""
     <div class='page'>
-      <div class='top'><div><div class='kicker'>KEY INDICATORS</div><h1>個股關鍵指標 1</h1><div class='date'>{date_text}｜季線、BIAS60、法人、動能</div></div></div>
+      <div class='top'><div><div class='kicker'>KEY INDICATORS</div><h1>市場與強勢標的雷達</h1><div class='date'>{date_text}｜季線、BIAS60、法人、動能</div></div></div>
       {detail_pages[0] if detail_pages else ''}
       <div class='footer'>跌深反彈不等於趨勢反轉；週報以安全邊際與趨勢修復作為主要判斷。</div>
     </div>"""
     page4 = f"""
     <div class='page'>
-      <div class='top'><div><div class='kicker'>KEY INDICATORS</div><h1>個股關鍵指標 2</h1><div class='date'>{date_text}｜量能、OBV、KD、MACD</div></div></div>
+      <div class='top'><div><div class='kicker'>KEY INDICATORS</div><h1>修正與觀察標的雷達</h1><div class='date'>{date_text}｜量能、OBV、KD、MACD</div></div></div>
       {detail_pages[1] if len(detail_pages) > 1 else ''}
       <div class='footer'>同一弱訊號連續出現時，不建議每週重複操作；只有訊號升級或條件改變再重新評估。</div>
     </div>"""
