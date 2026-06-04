@@ -2,10 +2,9 @@ name: Weekly Taiwan Stock Market Report
 
 on:
   schedule:
-    # Taiwan time Friday 16:00 = UTC 08:00
-    - cron: '0 8 * * 5'
-    # Taiwan time Friday 16:30 backup run
-    - cron: '30 8 * * 5'
+    # Taiwan time Friday 15:00-23:00 = UTC Friday 07:00-15:00.
+    # Once the dated backup PDF exists, later hourly runs stop before generating.
+    - cron: '0 7-15 * * 5'
   workflow_dispatch:
     inputs:
       force_run:

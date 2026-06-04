@@ -64,20 +64,22 @@ https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 
 直接上傳到上述 Google Drive 根資料夾，不再建立子資料夾。
 
-同一週防重複產出會以自用備份 PDF 檔名作為完成判斷；排程備援若偵測到同週檔案會跳過。手動執行可用 `force_run=true` 強制重新產生並更新 PDF。
+程式會先確認 8 個追蹤標的皆成功完成，且資料日一致；任何標的缺漏或資料日不符都會中止，不會發布不完整週報。
+
+同一週防重複產出會以最後上傳的自用備份 PDF 檔名作為完整發布判斷。免費固定 PDF 與自用備份 PDF 都成功上傳後，後續每小時排程偵測到同週備份檔便會直接跳過。手動執行可用 `force_run=true` 強制重新產生並更新 PDF。
 
 ## GitHub Actions
 
 排程：
 
-- 台灣時間每週五 16:00
-- 台灣時間每週五 16:30 備援
+- 台灣時間每週五 15:00 至 23:00，每整點執行
+- 若週報尚未完整產出或 Google Drive 上傳失敗，下個整點自動重試
+- 若免費固定 PDF 與日期備份 PDF 已完整上傳，後續排程自動跳過
 - 保留 `workflow_dispatch` 手動執行，支援 `force_run`
 
 GitHub Actions 使用 UTC，因此 workflow 內為：
 
-- `0 8 * * 5`
-- `30 8 * * 5`
+- `0 7-15 * * 5`
 
 ## 本機測試
 

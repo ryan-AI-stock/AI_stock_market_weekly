@@ -3591,7 +3591,7 @@ def drive_file_exists(file_name: str, cfg: dict) -> bool:
             includeItemsFromAllDrives=True,
         ).execute().get("files", [])
         if existing:
-            print(f"Google Drive 已有 {file_name}，視為本週已完成，跳過備援重複寄送")
+            print(f"Google Drive 已有 {file_name}，視為本週完整發布完成，跳過本次每小時重試")
             return True
     except Exception as exc:
         print(f"⚠️  檢查 Google Drive 既有檔案失敗，繼續執行避免漏寄：{exc}")
@@ -3804,6 +3804,33 @@ def _handle_drive_publish_failure(cfg: dict, msg: str) -> None:
     print("⚠️  本機或 Email 未關閉情境：保留本機產出檔，略過 Google Drive 上傳")
 
 
+def validate_complete_report_results(results: list, watchlist: list, expected_date: str) -> None:
+    expected = {stock["ticker"]: stock.get("name", stock["ticker"]) for stock in watchlist}
+    actual = {}
+    duplicates = []
+    stale = []
+
+    for name, ticker, result in results:
+        if ticker in actual:
+            duplicates.append(ticker)
+        actual[ticker] = result
+        data_date = result.get("data_date")
+        if data_date != expected_date:
+            stale.append(f"{name}({ticker})={data_date or '無資料日'}")
+
+    missing = [f"{name}({ticker})" for ticker, name in expected.items() if ticker not in actual]
+    issues = []
+    if missing:
+        issues.append(f"缺少 {', '.join(missing)}")
+    if stale:
+        issues.append(f"資料日不符 {', '.join(stale)}")
+    if duplicates:
+        issues.append(f"重複標的 {', '.join(sorted(set(duplicates)))}")
+
+    if issues:
+        raise RuntimeError(f"週報完整性檢查失敗：{'；'.join(issues)}")
+
+
 # ── 發送 Email ───────────────────────────────────────────────
 def send_email(cfg: dict, html: str, today: str) -> bool:
     if not cfg.get("email", {}).get("enabled", False):
@@ -3838,6 +3865,7 @@ def send_email(cfg: dict, html: str, today: str) -> bool:
 def main():
     cfg   = load_config()
     now_tw = datetime.now(TAIPEI_TZ)
+    expected_date = _expected_latest_price_date(now_tw).strftime("%Y-%m-%d")
     report_meta = get_report_meta(now_tw)
     today = report_meta["date"]
     force_run = os.environ.get("FORCE_RUN_REPORT", "").strip().lower() in ("1", "true", "yes", "y")
@@ -3899,9 +3927,11 @@ def main():
         except Exception as e:
             print(f"❌ {e}")
 
-    if not results:
-        print("所有分析失敗，中止")
-        return
+    validate_complete_report_results(results, cfg["watchlist"], expected_date)
+    print(
+        f"✅ 週報完整性檢查通過：{len(results)}/{len(cfg['watchlist'])} 檔，"
+        f"資料日={expected_date}"
+    )
 
     event_items = fetch_auto_market_events(cfg, today)
     print(f"  自動重大事件掃描：取得 {len(event_items)} 則高關聯事件")
@@ -3937,6 +3967,7 @@ def main():
 
     public_preview_path = Path(__file__).parent / "public_report" / "public_report_preview.html"
     backup_pdf_path = render_report_pdf(public_preview_path, backup_pdf_name, prefer_css_page_size=True)
+    backup_link = None
     if backup_pdf_path:
         print(f"已產生自用備份 PDF：{backup_pdf_path}")
         backup_link = upload_report_file_to_drive(
@@ -3958,6 +3989,9 @@ def main():
             cfg,
             "Email 已關閉，但自用備份 PDF 產生失敗，發布流程中止",
         )
+
+    if public_link and backup_link:
+        print("✅ 免費固定 PDF 與自用備份 PDF 已完整上傳 Google Drive；後續每小時排程將自動跳過")
 
 
 
