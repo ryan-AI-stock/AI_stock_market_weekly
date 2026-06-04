@@ -1,6 +1,14 @@
 import unittest
+from datetime import date, datetime
 
-from stock_market_tracking_system import validate_complete_report_results
+from stock_market_tracking_system import (
+    TAIPEI_TZ,
+    last_twse_trading_day_of_week,
+    latest_twse_trading_day,
+    parse_twse_closed_dates,
+    resolve_weekly_report_target,
+    validate_complete_report_results,
+)
 
 
 class ValidateCompleteReportResultsTests(unittest.TestCase):
@@ -35,6 +43,59 @@ class ValidateCompleteReportResultsTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "資料日不符 台積電"):
             validate_complete_report_results(results, self.watchlist, self.expected_date)
+
+
+class WeeklyTradingDateTests(unittest.TestCase):
+    def test_holiday_calendar_excludes_named_trading_days(self):
+        payload = {
+            "data": [
+                ["2026-02-11", "農曆春節前最後交易日", ""],
+                ["2026-02-12", "市場無交易，僅辦理結算交割作業", ""],
+                ["2026-02-20", "農曆除夕及春節", ""],
+                ["bad-date", "測試休市", ""],
+            ]
+        }
+
+        self.assertEqual(
+            parse_twse_closed_dates(payload),
+            {date(2026, 2, 12), date(2026, 2, 20)},
+        )
+
+    def test_friday_holiday_moves_report_day_to_thursday(self):
+        closed = {date(2026, 6, 19)}
+
+        self.assertEqual(
+            last_twse_trading_day_of_week(date(2026, 6, 19), closed),
+            date(2026, 6, 18),
+        )
+
+    def test_report_becomes_due_on_holiday_shortened_week(self):
+        closed = {date(2026, 6, 19)}
+        now = datetime(2026, 6, 18, 15, 0, tzinfo=TAIPEI_TZ)
+
+        self.assertEqual(resolve_weekly_report_target(now, closed), date(2026, 6, 18))
+
+    def test_before_current_week_final_day_keeps_previous_target(self):
+        now = datetime(2026, 6, 18, 15, 0, tzinfo=TAIPEI_TZ)
+
+        self.assertEqual(resolve_weekly_report_target(now, set()), date(2026, 6, 12))
+
+    def test_retry_target_continues_after_23_and_across_days(self):
+        now = datetime(2026, 6, 6, 2, 0, tzinfo=TAIPEI_TZ)
+
+        self.assertEqual(resolve_weekly_report_target(now, set()), date(2026, 6, 5))
+
+    def test_full_week_holiday_keeps_previous_target(self):
+        closed = {date(2026, 2, day) for day in range(16, 21)}
+        now = datetime(2026, 2, 20, 18, 0, tzinfo=TAIPEI_TZ)
+
+        self.assertEqual(resolve_weekly_report_target(now, closed), date(2026, 2, 13))
+
+    def test_latest_trading_day_skips_holiday(self):
+        closed = {date(2026, 6, 19)}
+        now = datetime(2026, 6, 19, 16, 0, tzinfo=TAIPEI_TZ)
+
+        self.assertEqual(latest_twse_trading_day(now, closed), date(2026, 6, 18))
 
 
 if __name__ == "__main__":

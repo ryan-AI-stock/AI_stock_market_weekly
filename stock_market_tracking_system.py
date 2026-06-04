@@ -12,7 +12,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import quote_plus
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta, timezone, time
+from datetime import date, datetime, timedelta, timezone, time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -32,6 +32,7 @@ WARN_COLOR = "#e67e22"
 INFO_COLOR = "#3498db"
 NEUTRAL_COLOR = "#95a5a6"
 TAIPEI_TZ = timezone(timedelta(hours=8))
+WEEKLY_REPORT_START_TIME = time(15, 0)
 WEEKLY_DARK = "#12322b"
 WEEKLY_DARK_2 = "#1f493f"
 WEEKLY_GOLD = "#c9a227"
@@ -516,6 +517,92 @@ def _fetch_twse_index_data(start_date, end_date) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"]).drop_duplicates("Date")
     return df.set_index("Date").sort_index()
 
+
+def fetch_twse_closed_dates(years: set[int]) -> set[date]:
+    closed_dates = set()
+    for year in sorted(years):
+        url = (
+            "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule"
+            f"?response=json&queryYear={year - 1911}"
+        )
+        resp = requests.get(url, headers=_twse_headers(), timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+        if str(payload.get("stat", "")).lower() != "ok":
+            raise RuntimeError(f"證交所 {year} 年休市日曆回傳異常：{payload.get('stat')}")
+        closed_dates.update(parse_twse_closed_dates(payload))
+    return closed_dates
+
+
+def parse_twse_closed_dates(payload: dict) -> set[date]:
+    closed_dates = set()
+    for row in payload.get("data", []):
+        if len(row) < 2 or "交易日" in str(row[1]):
+            continue
+        try:
+            closed_dates.add(datetime.strptime(str(row[0]), "%Y-%m-%d").date())
+        except ValueError:
+            continue
+    return closed_dates
+
+
+def is_twse_trading_day(day: date, closed_dates: set[date]) -> bool:
+    return day.weekday() < 5 and day not in closed_dates
+
+
+def last_twse_trading_day_of_week(day: date, closed_dates: set[date]) -> date | None:
+    monday = day - timedelta(days=day.weekday())
+    for offset in range(4, -1, -1):
+        candidate = monday + timedelta(days=offset)
+        if is_twse_trading_day(candidate, closed_dates):
+            return candidate
+    return None
+
+
+def latest_twse_trading_day(now: datetime, closed_dates: set[date]) -> date:
+    dt = now if now.tzinfo else now.replace(tzinfo=TAIPEI_TZ)
+    candidate = dt.date()
+    if dt.time() < time(13, 40):
+        candidate -= timedelta(days=1)
+    for _ in range(370):
+        if is_twse_trading_day(candidate, closed_dates):
+            return candidate
+        candidate -= timedelta(days=1)
+    raise RuntimeError("無法找到最近台股交易日")
+
+
+def resolve_weekly_report_target(now: datetime, closed_dates: set[date]) -> date:
+    dt = now if now.tzinfo else now.replace(tzinfo=TAIPEI_TZ)
+    monday = dt.date() - timedelta(days=dt.date().weekday())
+    for week_offset in range(0, 54):
+        week_day = monday - timedelta(days=7 * week_offset)
+        target = last_twse_trading_day_of_week(week_day, closed_dates)
+        if target is None:
+            continue
+        due_at = datetime.combine(target, WEEKLY_REPORT_START_TIME, tzinfo=TAIPEI_TZ)
+        if dt >= due_at:
+            return target
+    raise RuntimeError("無法找到已到產出時間的台股週報交易日")
+
+
+def resolve_report_target(now: datetime, force_run: bool) -> date:
+    dt = now if now.tzinfo else now.replace(tzinfo=TAIPEI_TZ)
+    monday = dt.date() - timedelta(days=dt.date().weekday())
+    calendar_years = {
+        (monday - timedelta(days=7)).year,
+        (monday + timedelta(days=4)).year,
+    }
+    try:
+        closed_dates = fetch_twse_closed_dates(calendar_years)
+    except Exception as exc:
+        raise RuntimeError(
+            f"無法取得證交所官方休市日曆，為避免選錯週報日，本次中止並等待下次重試：{exc}"
+        ) from exc
+    if force_run:
+        return latest_twse_trading_day(dt, closed_dates)
+    return resolve_weekly_report_target(dt, closed_dates)
+
+
 def _expected_latest_price_date(now: datetime | None = None):
     dt = now or datetime.now(TAIPEI_TZ)
     if dt.tzinfo is None:
@@ -539,10 +626,10 @@ def _is_fresh_price_data(df: pd.DataFrame, end_date, max_stale_days: int = 0) ->
 
 
 
-def fetch_data(ticker: str, days: int) -> pd.DataFrame:
+def fetch_data(ticker: str, days: int, end_date: date | None = None) -> pd.DataFrame:
     # 台股價格優先用證交所官方日資料，避免 yfinance 調整價或暫存造成收盤價失真。
     now_tw = datetime.now(TAIPEI_TZ)
-    end = _expected_latest_price_date(now_tw)
+    end = end_date or _expected_latest_price_date(now_tw)
     start = end - timedelta(days=days)
     stock_id = ticker.upper().replace(".TW", "").replace(".TWO", "")
     try:
@@ -3831,6 +3918,29 @@ def validate_complete_report_results(results: list, watchlist: list, expected_da
         raise RuntimeError(f"週報完整性檢查失敗：{'；'.join(issues)}")
 
 
+def _write_github_output(name: str, value: str) -> None:
+    output_path = os.environ.get("GITHUB_OUTPUT", "").strip()
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as output_file:
+            output_file.write(f"{name}={value}\n")
+    print(f"{name}={value}")
+
+
+def run_schedule_gate() -> None:
+    cfg = load_config()
+    now_tw = datetime.now(TAIPEI_TZ)
+    force_run = os.environ.get("FORCE_RUN_REPORT", "").strip().lower() in ("1", "true", "yes", "y")
+    target_date = resolve_report_target(now_tw, force_run)
+    backup_pdf_name = f"每週台股報告_{target_date.strftime('%Y%m%d')}.pdf"
+    should_run = force_run or not drive_file_exists(backup_pdf_name, cfg)
+    _write_github_output("target_date", target_date.strftime("%Y-%m-%d"))
+    _write_github_output("should_run", "true" if should_run else "false")
+    if should_run:
+        print(f"週報尚未完整發布：{backup_pdf_name}，執行完整產報流程")
+    else:
+        print(f"週報已完整發布：{backup_pdf_name}，本次排程在閘門停止")
+
+
 # ── 發送 Email ───────────────────────────────────────────────
 def send_email(cfg: dict, html: str, today: str) -> bool:
     if not cfg.get("email", {}).get("enabled", False):
@@ -3865,11 +3975,16 @@ def send_email(cfg: dict, html: str, today: str) -> bool:
 def main():
     cfg   = load_config()
     now_tw = datetime.now(TAIPEI_TZ)
-    expected_date = _expected_latest_price_date(now_tw).strftime("%Y-%m-%d")
-    report_meta = get_report_meta(now_tw)
-    today = report_meta["date"]
     force_run = os.environ.get("FORCE_RUN_REPORT", "").strip().lower() in ("1", "true", "yes", "y")
-    print(f"[{now_tw.strftime('%Y-%m-%d %H:%M')}] 開始每週趨勢分析，共 {len(cfg['watchlist'])} 檔")
+    target_date = resolve_report_target(now_tw, force_run)
+    expected_date = target_date.strftime("%Y-%m-%d")
+    target_dt = datetime.combine(target_date, WEEKLY_REPORT_START_TIME, tzinfo=TAIPEI_TZ)
+    report_meta = get_report_meta(target_dt)
+    today = report_meta["date"]
+    print(
+        f"[{now_tw.strftime('%Y-%m-%d %H:%M')}] 週報目標交易日={expected_date}，"
+        f"開始每週趨勢分析，共 {len(cfg['watchlist'])} 檔"
+    )
     if force_run:
         print("  force_run=true，忽略同週既有檔案檢查，強制重新產生並更新 PDF")
     backup_pdf_name = f"每週台股報告_{report_meta['date_key']}.pdf"
@@ -3889,7 +4004,7 @@ def main():
     news_items = fetch_auto_news(cfg)
     print(f"  自動新聞掃描：取得 {len(news_items)} 則高關聯新聞")
 
-    market_inst_value_week = fetch_market_institutional_value_week(now_tw)
+    market_inst_value_week = fetch_market_institutional_value_week(target_dt)
 
     results = []
     for stock in cfg["watchlist"]:
@@ -3899,11 +4014,9 @@ def main():
         print(f"  {name} ({ticker}) ...", end=" ")
         try:
             scfg = get_stock_cfg(stock, cfg)
-            df   = fetch_data(ticker, cfg["lookback_days"])
+            df   = fetch_data(ticker, cfg["lookback_days"], target_date)
             data_date = df.index[-1].strftime("%Y-%m-%d")
             data_dt = datetime.strptime(data_date, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ)
-            report_meta = get_report_meta(data_dt)
-            today = report_meta["date"]
             df   = calc_indicators(df, scfg)
             inst = fetch_institutional(ticker) if scfg.get("use_institutional", True) else None
             inst_week = fetch_weekly_institutional(ticker, data_dt) if scfg.get("use_institutional", True) else None
@@ -3996,5 +4109,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--schedule-gate" in sys.argv:
+        run_schedule_gate()
+    else:
+        main()
 
