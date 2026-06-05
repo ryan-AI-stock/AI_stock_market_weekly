@@ -6,15 +6,13 @@ Repository : github.com/ryanhsu1983/AI_stock_market_weekly
 """
 
 import html as html_lib
-import os, re, smtplib, sys, requests
+import os, re, sys, requests
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote_plus
 import yfinance as yf
 import pandas as pd
 from datetime import date, datetime, timedelta, timezone, time
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 
 from weekly_drive_client import build_google_drive_service, drive_name_query, upload_file_to_drive
@@ -24,6 +22,7 @@ from weekly_drive_settings import (
     resolve_public_report_file_id,
     resolve_public_report_folder_id,
 )
+from weekly_email import send_report_email
 from weekly_publish_policy import email_disabled, handle_drive_publish_failure
 from weekly_runtime import env_flag, load_config_file, write_github_output
 
@@ -3558,37 +3557,6 @@ def run_schedule_gate() -> None:
         print(f"週報已完整發布：{backup_pdf_name}，本次排程在閘門停止")
 
 
-# ── 發送 Email ───────────────────────────────────────────────
-# 保留 Email 路徑：Drive PDF 維持主要發布管道。
-def send_email(cfg: dict, html: str, today: str) -> bool:
-    if not cfg.get("email", {}).get("enabled", False):
-        print("Email 發送已關閉，略過寄信")
-        return False
-    smtp_user = os.environ.get("SMTP_USERNAME", "").strip()
-    smtp_pass = os.environ.get("SMTP_PASSWORD", "").strip()
-    report_to = os.environ.get("REPORT_EMAIL_TO", "").strip()
-    if not smtp_user or not smtp_pass or not report_to:
-        print("⚠️  未設定 SMTP_USERNAME / SMTP_PASSWORD / REPORT_EMAIL_TO，跳過發信")
-        return False
-    ec  = cfg["email"]
-    meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = ec["subject"].format(date=today, week=meta["week"], week_key=meta["week_key"])
-    msg["From"]    = smtp_user
-    msg["To"]      = report_to
-    msg.attach(MIMEText(html, "html", "utf-8"))
-    s = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30)
-    try:
-        recipients = [addr.strip() for addr in report_to.split(",") if addr.strip()]
-        s.login(smtp_user, smtp_pass)
-        s.sendmail(smtp_user, recipients, msg.as_string())
-        s.quit()
-    except Exception:
-        s.close()
-        raise
-    return True
-
-
 # ── 主流程 ───────────────────────────────────────────────────
 def main():
     cfg   = load_config()
@@ -3680,7 +3648,7 @@ def main():
     if cfg.get("email", {}).get("enabled", False):
         print("\nEmail 設定啟用，準備發送 ...")
         try:
-            if send_email(cfg, html, today):
+            if send_report_email(cfg, html, today, report_meta):
                 print("✅ Email 發送成功")
         except Exception as e:
             print(f"❌ Email 失敗：{e}")
