@@ -840,13 +840,13 @@ def eval_bias60(df: pd.DataFrame, scfg: dict) -> dict:
         locked = can_lock
         label  = f"🔥 過熱{'鎖定' if can_lock else '警示'}（季線乖離{bias60:.1f}%，歷史{p_high_pct}%分位）"
         color  = UP_COLOR
-        note   = f"Z={z:.2f}｜超過歷史{p_high_pct}%分位({p_high:.1f}%)｜{'強制禁止買進' if can_lock else '僅警示，不鎖定'}"
+        note   = f"Z={z:.2f}｜超過歷史{p_high_pct}%分位({p_high:.1f}%)｜{'正向條件暫停計入' if can_lock else '僅警示，不鎖定'}"
     elif bias60 <= p_low:
         zone   = "oversold"
         locked = False
-        label  = f"❄️ 超跌部署區（季線乖離{bias60:.1f}%，歷史{p_low_pct}%分位）"
+        label  = f"❄️ 超跌觀察區（季線乖離{bias60:.1f}%，歷史{p_low_pct}%分位）"
         color  = DOWN_COLOR
-        note   = f"Z={z:.2f}｜低於歷史{p_low_pct}%分位({p_low:.1f}%)｜統計黃金建倉區"
+        note   = f"Z={z:.2f}｜低於歷史{p_low_pct}%分位({p_low:.1f}%)｜統計超跌觀察區"
     else:
         zone   = "normal"
         locked = False
@@ -878,18 +878,16 @@ def calc_pyramid(df: pd.DataFrame, scfg: dict, signal_level: str) -> dict:
     if signal_level.startswith("BUY_"):
         batches = int(abs(drop_pct) / drop_step) if drop_pct < 0 else 0
         if batches == 0:
-            suggestions.append(
-                f"📌 第1批建倉：建議投入可用資金 <b>{add_ratio:.0f}%</b>（首批試單）")
+            suggestions.append("📌 正向條件初步成立：進入第一層觀察")
         else:
             suggestions.append(
-                f"📌 第{batches+1}批加碼：距高點回落 {abs(drop_pct):.1f}%，"
-                f"建議再投入剩餘資金 <b>{add_ratio:.0f}%</b>")
+                f"📌 正向條件層級 {batches+1}：距高點回落 {abs(drop_pct):.1f}%")
             suggestions.append(
-                f"　　累計已達 {batches} 次加碼條件（每跌 {drop_step:.0f}% 加一批）")
+                f"　　累計已達 {batches} 層回落條件（每回落 {drop_step:.0f}% 增加一層觀察）")
         if is_consolidating:
             suggestions.append(
-                f"⏱️ 時間補位提醒：近 {time_days} 日盤整幅度僅 {range_pct:.1f}%，"
-                f"可考慮投入剩餘資金 <b>{time_ratio:.0f}%</b> 進行時間性補位")
+                f"⏱️ 時間條件提醒：近 {time_days} 日盤整幅度僅 {range_pct:.1f}%，"
+                f"列入後續條件觀察")
 
     return dict(drop_pct=drop_pct, is_consolidating=is_consolidating,
                 range_pct=range_pct, suggestions=suggestions)
@@ -913,7 +911,7 @@ def classify_market_regime(close: float, ma_s: float, ma_m: float, ma_l: float,
             "key": "STRONG_BULL",
             "label": "大多頭",
             "color": UP_COLOR,
-            "note": "中期均線維持多頭排列，價格也站在主要均線上方；此時重點是抱住核心部位，不因短線弱賣出訊號頻繁下車。",
+            "note": "中期均線維持多頭排列，價格也站在主要均線上方；短線風險條件增加時，仍需搭配關鍵均線判斷趨勢是否改變。",
         }
     if ma_m > ma_l:
         return {
@@ -927,13 +925,13 @@ def classify_market_regime(close: float, ma_s: float, ma_m: float, ma_l: float,
             "key": "BEAR",
             "label": "空頭",
             "color": DOWN_COLOR,
-            "note": "中期均線偏空且價格落在主要均線下方；此時賣出訊號權重提高，買進訊號需更保守。",
+            "note": "中期均線偏空且價格落在主要均線下方；此時風險條件權重提高，正向條件需更審慎解讀。",
         }
     return {
         "key": "RANGE",
         "label": "盤整",
         "color": NEUTRAL_COLOR,
-        "note": "趨勢方向尚未明確；此時可依分數分批，但不宜把單一弱訊號視為重倉依據。",
+        "note": "趨勢方向尚未明確；此時需搭配多項條件判斷，不宜過度解讀單一弱訊號。",
     }
 
 
@@ -977,22 +975,22 @@ def _build_contextual_reason(direction: str, level_key: str, regime: dict,
                 f"{positives}是正面訊號，" if positives else ""
             ) + "但仍要看量能與法人是否延續，才算趨勢重新轉強。"
         if regime_key == "BEAR":
-            return "空頭或中期趨勢尚未修復時，反彈先視為修正中的反彈；買進訊號只適合觀察或小部位，不適合追價。"
+            return "空頭或中期趨勢尚未修復時，反彈先視為修正中的反彈；正向條件僅供觀察，追價風險偏高。"
         if b60.get("zone") == "overheated":
-            return "中期乖離偏高，代表安全邊際下降；即使動能仍強，也以續抱或等待拉回為主。"
+            return "中期乖離偏高，代表安全邊際下降；即使動能仍強，也需觀察拉回風險。"
         if positives and risks:
-            return f"{positives}偏正面，但{risks}仍需修復；適合等確認，不急著追價。"
+            return f"{positives}偏正面，但{risks}仍需修復；仍需等待確認，追價風險仍在。"
         if positives:
             return f"{positives}支持趨勢延續，但週報模型仍以分批和安全邊際為主。"
 
     if direction == "SELL":
         if regime_key in ("STRONG_BULL", "BULL_PULLBACK") and level_key in ("WEAK", "NOTICE"):
-            return "多頭修正中的弱賣訊偏向風險提醒，不代表立刻出清核心部位；重點看是否跌破關鍵均線。"
+            return "多頭修正中的輕度風險條件偏向提醒；重點觀察是否跌破關鍵均線。"
         if risks:
-            return f"{risks}顯示風險升溫；若後續法人與量能未改善，應優先控管部位。"
+            return f"{risks}顯示風險升溫；後續需觀察法人與量能是否改善。"
 
     if direction == "OVERHEATED":
-        return "過熱代表追價風險高，不代表趨勢一定結束；核心部位可觀察，但新資金等待拉回比較合理。"
+        return "過熱代表追價風險高，不代表趨勢一定結束；後續重點是觀察拉回與趨勢變化。"
 
     if regime_key == "RANGE":
         if risks:
@@ -1006,71 +1004,71 @@ def build_trade_plan(level: str, regime: dict, b60: dict, lev_warn: bool = False
     direction, level_key = _parse_signal_level(level)
     base_pct = TRADE_BASE_PCTS.get(level_key, 0)
     regime_key = regime["key"]
-    action = "觀察"
+    action = "條件待確認"
     trade_pct = 0
     color = NEUTRAL_COLOR
-    headline = "不建議交易"
+    headline = "維持觀察"
     reason = "目前訊號不足，保留觀察即可。"
 
     if direction == "BUY":
-        action = "買進或加碼"
+        action = "正向條件"
         color = UP_COLOR
         if regime_key == "BEAR":
             trade_pct = {"STRONG": 20, "MID": 10, "WEAK": 0, "NOTICE": 0, "NEUTRAL": 0}.get(level_key, 0)
-            reason = "空頭環境下即使出現買訊，也先視為反彈或試單，不建議直接重倉。"
+            reason = "空頭環境下即使正向條件增加，也先視為反彈觀察，仍需等待趨勢修復。"
         elif regime_key == "STRONG_BULL" and b60["zone"] == "overheated":
             trade_pct = 0
-            action = "暫停追買"
+            action = "追價風險偏高"
             color = WARN_COLOR
-            reason = "大多頭仍可續抱，但季線乖離已高，不建議用新資金追價。"
+            reason = "趨勢條件仍成立，但季線乖離已高，追價風險偏高。"
         elif regime_key == "STRONG_BULL":
             trade_pct = base_pct
-            reason = "大多頭環境下，買訊可順勢執行，但仍只在訊號首次出現或升級時加碼。"
+            reason = "大多頭環境下正向條件較完整，仍需觀察訊號是否持續或升級。"
         elif regime_key == "BULL_PULLBACK":
             trade_pct = base_pct
-            reason = "多頭修正中的買訊較有分批布局意義，但仍需保留後續加碼空間。"
+            reason = "多頭修正中的正向條件增加，但仍需觀察後續是否持續修復。"
         else:
             trade_pct = base_pct
-            reason = "盤整環境下依訊號分批，不一次打滿部位。"
+            reason = "盤整環境下方向尚未明確，需等待更多條件確認。"
 
     elif direction == "SELL":
-        action = "賣出或減碼"
+        action = "風險條件"
         color = DOWN_COLOR
         if regime_key == "STRONG_BULL":
             trade_pct = {"STRONG": 30, "MID": 10, "WEAK": 0, "NOTICE": 0, "NEUTRAL": 0}.get(level_key, 0)
-            reason = "大多頭下弱賣出通常只是震盪提醒；中訊號才小幅降風險，強訊號再明顯減碼。"
+            reason = "大多頭下輕度風險條件通常只是震盪提醒；條件增加時再檢查趨勢是否改變。"
         elif regime_key == "BULL_PULLBACK":
             trade_pct = {"STRONG": 40, "MID": 20, "WEAK": 0, "NOTICE": 0, "NEUTRAL": 0}.get(level_key, 0)
-            reason = "多頭修正時先守核心持股，弱賣出不急著動作，中強訊號才分批降部位。"
+            reason = "多頭修正時，輕度風險條件不代表趨勢已反轉；需觀察風險條件是否持續增加。"
         elif regime_key == "BEAR":
             trade_pct = base_pct
-            reason = "空頭環境下賣出訊號可信度提高，可依原始比例控管風險。"
+            reason = "空頭環境下風險條件可信度提高，需留意風險是否持續擴大。"
         else:
             trade_pct = base_pct
-            reason = "盤整環境下依原始比例分批，避免單日判斷過度影響部位。"
+            reason = "盤整環境下需避免過度解讀單日條件，持續觀察區間變化。"
 
     elif direction == "OVERHEATED":
-        action = "禁止追買"
+        action = "追價風險偏高"
         color = WARN_COLOR
         if level_key in ("MID", "STRONG"):
             if regime_key == "STRONG_BULL":
                 trade_pct = 10 if level_key == "MID" else 30
-                reason = "行情仍屬大多頭，但已過熱且賣壓分數升高；以小幅停利或降低槓桿為主，不清空核心部位。"
+                reason = "行情仍屬大多頭，但已過熱且風險條件分數升高；需留意波動與槓桿風險。"
             elif regime_key == "BULL_PULLBACK":
                 trade_pct = 20 if level_key == "MID" else 40
-                reason = "過熱後進入修正，賣壓分數已不低，可分批降部位並等待下一次整理。"
+                reason = "過熱後進入修正，風險條件分數已不低，需觀察整理是否延續。"
             else:
                 trade_pct = base_pct
-                reason = "過熱且賣壓明顯，先降低風險，不新增買進。"
-            action = "減碼"
+                reason = "過熱且風險條件明顯，後續需留意波動擴大。"
+            action = "風險條件"
             color = DOWN_COLOR
         else:
             trade_pct = 0
-            reason = "過熱代表不追買；但賣出分數還不夠強，若處在多頭中不建議只因過熱就下車。"
+            reason = "過熱代表追價風險偏高；但風險條件分數仍不高，需搭配趨勢變化觀察。"
 
     if level_key == "NOTICE":
         trade_pct = 0
-        reason = "提醒等級只代表市場溫度有變化，不作為實際交易依據。"
+        reason = "提醒等級只代表市場溫度有變化，僅供條件觀察。"
 
     contextual_reason = _build_contextual_reason(direction, level_key, regime, b60, context)
     if contextual_reason:
@@ -1078,16 +1076,14 @@ def build_trade_plan(level: str, regime: dict, b60: dict, lev_warn: bool = False
 
     if lev_warn and trade_pct > 0:
         trade_pct = min(trade_pct, 20)
-        reason += " 槓桿ETF波動與耗損較高，單次動作上限先壓低。"
+        reason += " 槓桿ETF波動與耗損較高，條件分數上限採較保守設定。"
 
     if trade_pct > 0:
-        headline = f"{action} {trade_pct}%"
-    elif action == "暫停追買":
-        headline = "暫停追買"
-    elif action == "禁止追買":
-        headline = "禁止追買，核心部位續抱觀察"
+        headline = f"{action}通過 {int(round(trade_pct / 10))}/10"
+    elif action == "追價風險偏高":
+        headline = "追價風險偏高"
     else:
-        headline = "不交易，觀察"
+        headline = "維持觀察"
 
     return {
         "headline": headline,
@@ -1097,7 +1093,7 @@ def build_trade_plan(level: str, regime: dict, b60: dict, lev_warn: bool = False
         "color": color,
         "reason": reason,
         "regime": regime,
-        "repeat_rule": "同一等級訊號連續出現時，不建議每週重複操作；只有首次出現、訊號升級，或部位尚未達計畫比例時才執行。",
+        "repeat_rule": "同一等級條件連續出現時，不代表狀態改變；只有等級升降或條件變化時再重新評估。",
     }
 
 
@@ -1105,9 +1101,9 @@ def classify_weekly_posture(regime: dict, b60: dict, week_chg_pct: float | None,
                             close: float, ma_s: float, ma_m: float, ma_l: float,
                             effective_buy: float, effective_sell: float) -> tuple[str, str, str]:
     if b60.get("zone") == "overheated":
-        return "過熱不追", WARN_COLOR, "趨勢仍可偏多看待，但季線乖離偏高；下週重點是量縮拉回或高檔爆量轉弱。"
+        return "過熱風險偏高", WARN_COLOR, "趨勢仍可偏多看待，但季線乖離偏高；下週重點是量縮拉回或高檔爆量轉弱。"
     if close > ma_s > ma_m > ma_l and (week_chg_pct or 0) > 0 and effective_buy >= effective_sell:
-        return "強勢續抱", UP_COLOR, "價格站在主要均線上方且本週收高；下週觀察能否守住10日線並延續法人買超。"
+        return "趨勢條件仍成立", UP_COLOR, "價格站在主要均線上方且本週收高；下週觀察能否守住10日線並延續法人買超。"
     if close < ma_m and effective_sell >= max(30, effective_buy):
         return "轉弱觀察", DOWN_COLOR, "收盤跌回中短均線下方且風險分數升溫；下週先看20日線能否重新站回。"
     if week_chg_pct is not None and week_chg_pct < -3 and close >= ma_l:
@@ -1332,7 +1328,7 @@ def trade_plan_html(result: dict, compact: bool = False) -> str:
         f'{signal_badge}'
         f'{status_tags}'
         f'<span style="color:{trade_plan.get("color", NEUTRAL_COLOR)};'
-        f'font-size:15px;font-weight:bold;">{trade_plan.get("headline", "不交易，觀察")}</span>'
+        f'font-size:15px;font-weight:bold;">{trade_plan.get("headline", "維持觀察")}</span>'
         f'</div>'
         f'<div style="font-size:12px;color:#555;line-height:1.7;">'
         f'{trade_plan.get("reason", "")}</div>'
@@ -1446,8 +1442,8 @@ def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
 
     # 槓桿ETF警示標籤
     if lev_warn:
-        items.append(("⚠️ 槓桿警示", "每日重置ETF，不適合長抱", "#e67e22",
-                      "槓桿ETF有長期耗損效應，僅適合短線波段操作"))
+        items.append(("⚠️ 槓桿警示", "每日重置ETF，不適合長期持有", "#e67e22",
+                      "槓桿ETF有長期耗損效應，短期波動與風險較高"))
 
     # ── BIAS60 Z-Score ────────────────────────────────────────
     b60 = eval_bias60(df, scfg)
@@ -1494,8 +1490,8 @@ def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
     kd_buy  = k > d and kp <= dp and k < thr["kd_buy"]
     kd_sell = k < d and kp >= dp and k > thr["kd_sell"]
     kd_note = (f"當前 K={k:.1f} D={d:.1f}｜"
-               f"買進區：K<{thr['kd_buy']}且K上穿D｜"
-               f"賣出區：K>{thr['kd_sell']}且K下穿D｜"
+               f"低檔正向交叉區：K<{thr['kd_buy']}且K上穿D｜"
+               f"高檔風險交叉區：K>{thr['kd_sell']}且K下穿D｜"
                f"正常區間：{thr['kd_buy']}～{thr['kd_sell']}")
     if kd_buy:
         l2_buy += 1
@@ -1511,7 +1507,7 @@ def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
     b20_sell = thr.get("bias20_sell", thr.get("bias_sell",  5.0))
     bias20_note = (f"當前={bias20:.2f}%（收盤偏離MA{m}的幅度）｜"
                    f"正常區間：{b20_buy}%～+{b20_sell}%｜"
-                   f"低於{b20_buy}%=跌深買進區，高於+{b20_sell}%=漲多賣出區")
+                   f"低於{b20_buy}%=跌深正向條件區，高於+{b20_sell}%=漲多風險條件區")
     if bias20 < b20_buy:
         l2_buy += 1
         items.append(("乖離率(MA{})".format(m), "跌深反彈機會 ✅", "#2ecc71", bias20_note))
@@ -1562,7 +1558,7 @@ def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
         obv_falling = obv < obv_ma and obv < obv_prev
         price_up    = close > float(prev["Close"])
         obv_note = (f"OBV={'高於' if obv>obv_ma else '低於'}{thr['obv_ma_period']}日均線｜"
-                    f"OBV持續累積=買盤入場，OBV持續下滑=賣盤出場｜"
+                    f"OBV持續累積=資金偏流入，OBV持續下滑=資金偏流出｜"
                     f"OBV領先價格=強力買訊，價漲OBV跌=背離警示")
         if obv_rising and price_up:
             obv_label, obv_color = "量價齊揚 ✅",    "#2ecc71"; l2_buy  += 1
@@ -1594,20 +1590,20 @@ def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
     # ── 綜合訊號 ──────────────────────────────────────────────
     if b60["locked"]:
         if l2_sell >= 2 or trend == "bear":
-            level, emoji, summary = "STRONG_SELL", "🔵", "強賣出訊號"
-            advice = f"市場過熱且技術面轉弱，建議出場"
+            level, emoji, summary = "STRONG_SELL", "🔵", "風險條件較完整"
+            advice = "市場過熱且技術面轉弱，風險條件增加"
             bg, border = "#eaf4fb", "#3498db"
         else:
-            level, emoji, summary = "OVERHEATED", "🔥", "過熱鎖定｜禁止追買"
+            level, emoji, summary = "OVERHEATED", "🔥", "過熱鎖定｜追價風險偏高"
             advice = (f"季線乖離{b60['bias60']:.1f}%超過歷史{scfg['thresholds'].get('bias60_p_high',95)}%分位"
-                      f"({b60['p_high']:.1f}%)，Z={b60['z_score']:.2f}，強制停止買進")
+                      f"({b60['p_high']:.1f}%)，Z={b60['z_score']:.2f}，正向條件暫停計入")
             bg, border = "#fdecea", "#c0392b"
 
     elif b60["zone"] == "oversold":
         if trend in ("healthy_bull","weak_bull") and l2_buy >= 1:
-            level, emoji, summary = "STRONG_BUY", "🔴", "強買進訊號（超跌加碼區）"
+            level, emoji, summary = "STRONG_BUY", "🔴", "正向條件較完整（超跌觀察區）"
             advice = (f"季線乖離{b60['bias60']:.1f}%低於歷史{scfg['thresholds'].get('bias60_p_low',5)}%分位"
-                      f"({b60['p_low']:.1f}%)，統計超跌，高信心建倉機會")
+                      f"({b60['p_low']:.1f}%)，統計超跌，正向條件較完整")
             bg, border = "#fdecea", "#e74c3c"
         else:
             level, emoji, summary = "WEAK_BUY", "🟡", "超跌觀察區"
@@ -1616,29 +1612,29 @@ def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
 
     else:
         if trend == "healthy_bull" and l2_buy >= 2:
-            level, emoji, summary = "STRONG_BUY",  "🔴", "強買進訊號"
-            advice = "多頭健康，多指標共振，建議關注進場機會"
+            level, emoji, summary = "STRONG_BUY",  "🔴", "正向條件較完整"
+            advice = "多頭健康，多項正向條件共振"
             bg, border = "#fdecea", "#e74c3c"
         elif (trend == "healthy_bull" and l2_buy == 1) or \
              (trend == "weak_bull"    and l2_buy >= 2):
-            level, emoji, summary = "WEAK_BUY",    "🟡", "弱買進提醒"
-            advice = "單一訊號或趨勢轉弱，列入觀察，勿躁進"
+            level, emoji, summary = "WEAK_BUY",    "🟡", "正向條件成立"
+            advice = "單一訊號或趨勢轉弱，僅列入觀察"
             bg, border = "#fef9e7", "#f39c12"
         elif trend in ("weak_bull","healthy_bull") and not ma_s_dir:
             level, emoji, summary = "WARNING",     "🟠", "風險警示"
-            advice = f"{s}日線走弱，建議降低部位或暫緩操作"
+            advice = f"{s}日線走弱，風險條件增加"
             bg, border = "#fef5e7", "#e67e22"
         elif trend == "bear" and l2_sell >= 2:
-            level, emoji, summary = "STRONG_SELL", "🔵", "強賣出訊號"
-            advice = "空頭確認，多指標共振，建議考慮出場"
+            level, emoji, summary = "STRONG_SELL", "🔵", "風險條件較完整"
+            advice = "空頭確認，多項風險條件共振"
             bg, border = "#eaf4fb", "#3498db"
         elif trend == "neutral":
             level, emoji, summary = "NEUTRAL",     "⚪", "方向不明"
-            advice = "均線糾結或訊號矛盾，建議觀望"
+            advice = "均線糾結或訊號矛盾，維持觀察"
             bg, border = "#f8f9fa", "#95a5a6"
         else:
             level, emoji, summary = "NEUTRAL",     "⚪", "無明顯訊號"
-            advice = "目前無強烈進出依據，繼續觀察"
+            advice = "目前條件不足，繼續觀察"
             bg, border = "#f8f9fa", "#95a5a6"
 
     pyramid = calc_pyramid(df, scfg, level)
@@ -1704,16 +1700,16 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         buy_score += buy
         sell_score += sell
         if buy or sell:
-            note = f"{note}｜分數影響:買進+{buy:.0f}/賣出+{sell:.0f}"
+            note = f"{note}｜分數影響:正向條件+{buy:.0f}/風險條件+{sell:.0f}"
         items.append((label, value, color, note))
 
     if lev_warn:
-        add_item("⚠️ 槓桿警示", "每日重置ETF，不適合長抱", "#e67e22",
-                 "槓桿ETF有長期耗損效應，僅適合短線波段操作")
+        add_item("⚠️ 槓桿警示", "每日重置ETF，不適合長期持有", "#e67e22",
+                 "槓桿ETF有長期耗損效應，短期波動與風險較高")
 
     b60 = eval_bias60(df, scfg)
     add_item("BIAS60 Z-Score", b60["label"], b60["color"],
-             b60["note"] + "｜用途:判斷中期位置是否過熱或超跌；過熱時不建議追買")
+             b60["note"] + "｜用途:判斷中期位置是否過熱或超跌；過熱時追價風險偏高")
 
     ma_s_dir = ma_s > ma_s_prev
     above_ma_s = close > ma_s
@@ -1888,8 +1884,8 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
     kd_buy = k > d and kp <= dp and k < thr["kd_buy"]
     kd_sell = k < d and kp >= dp and k > thr["kd_sell"]
     kd_note = (
-        f"當前 K={k:.1f} D={d:.1f}｜買進區:K<{thr['kd_buy']}且K上穿D｜"
-        f"賣出區:K>{thr['kd_sell']}且K下穿D｜KD適合抓時機，但容易鈍化"
+        f"當前 K={k:.1f} D={d:.1f}｜低檔正向交叉區:K<{thr['kd_buy']}且K上穿D｜"
+        f"高檔風險交叉區:K>{thr['kd_sell']}且K下穿D｜KD適合觀察轉折，但容易鈍化"
     )
     if kd_buy:
         kd_signal = "golden_cross"
@@ -2040,12 +2036,12 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         level_key, level_label = score_to_signal(effective_sell)
         level, emoji = f"OVERHEATED_{level_key}", "🔥"
         if effective_sell >= 15:
-            summary = f"過熱鎖定｜賣出{level_label}({effective_sell:.0f}/{max_possible:.0f}分)"
+            summary = f"過熱鎖定｜風險條件{level_label}({effective_sell:.0f}/{max_possible:.0f}分)"
         else:
-            summary = "過熱鎖定｜禁止追買"
+            summary = "過熱鎖定｜追價風險偏高"
         advice = (
             f"季線乖離{b60['bias60']:.1f}%超過歷史門檻，"
-            f"原始買進分數{buy_score:.0f}分僅供參考，實際買進分數歸零"
+            f"原始正向條件分數{buy_score:.0f}分僅供參考，實際正向條件分數歸零"
         )
         bg, border = "#fdecea", UP_COLOR
     elif effective_buy >= effective_sell:
@@ -2053,27 +2049,27 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         level_key, level_label = score_to_signal(score)
         emoji, bg, border = _direction_style("buy", level_key)
         level = f"BUY_{level_key}"
-        prefix = "超跌買進" if b60["zone"] == "oversold" and score >= 15 else "買進"
+        prefix = "超跌正向條件" if b60["zone"] == "oversold" and score >= 15 else "正向條件"
         summary = f"{emoji} {prefix}{level_label}({score:.0f}/{max_possible:.0f}分)"
         advice = {
-            "STRONG": "多項高權重指標共振，可依金字塔計畫分批執行",
-            "MID": "訊號有一定一致性，可考慮小部位或分批試單",
+            "STRONG": "多項高權重指標共振，正向條件較完整",
+            "MID": "正向條件有一定一致性，仍需觀察後續確認",
             "WEAK": "值得關注，但仍需等待更多確認",
-            "NOTICE": "微弱買進跡象，僅列入觀察",
-            "NEUTRAL": "買進依據不足，繼續觀察",
+            "NOTICE": "正向條件初步增加，僅列入觀察",
+            "NEUTRAL": "正向條件不足，繼續觀察",
         }[level_key]
     else:
         score = effective_sell
         level_key, level_label = score_to_signal(score)
         emoji, bg, border = _direction_style("sell", level_key)
         level = f"SELL_{level_key}"
-        summary = f"{emoji} 賣出{level_label}({score:.0f}/{max_possible:.0f}分)"
+        summary = f"{emoji} 風險條件{level_label}({score:.0f}/{max_possible:.0f}分)"
         advice = {
-            "STRONG": "多項高權重風險指標共振，應優先控管部位風險",
-            "MID": "賣出訊號有一定一致性，持有者應提高警覺",
-            "WEAK": "風險升溫，可檢查停損或降低追價",
-            "NOTICE": "微弱賣出跡象，僅列入觀察",
-            "NEUTRAL": "賣出依據不足，繼續觀察",
+            "STRONG": "多項高權重風險指標共振，風險條件較完整",
+            "MID": "風險條件有一定一致性，需提高警覺",
+            "WEAK": "風險升溫，追價風險增加",
+            "NOTICE": "風險條件初步增加，僅列入觀察",
+            "NEUTRAL": "風險條件不足，繼續觀察",
         }[level_key]
 
     trade_plan = build_trade_plan(level, regime, b60, lev_warn, trade_context)
@@ -2104,7 +2100,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         inst_note = (inst_week or {}).get("error", "本週法人資料未取得")
     add_item("本週三大法人", inst_value, inst_color, inst_note)
     add_item("均線位置", weekly["ma_position"], weekly["posture_color"], "觀察收盤價相對10/20/60日線的位置，判斷續強、轉弱或盤整")
-    add_item("本週趨勢總結", weekly["trend_summary"], weekly["posture_color"], "週報偏向中短線趨勢追蹤，不作為每日買賣提醒")
+    add_item("本週趨勢總結", weekly["trend_summary"], weekly["posture_color"], "週報偏向中短線趨勢追蹤，僅供條件觀察")
     add_item("下週觀察", weekly["next_focus"], weekly["posture_color"], "下週以關鍵均線、本週高低點、量能與法人買賣超是否延續作為觀察重點")
 
     return dict(
@@ -2113,7 +2109,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         close=close, bias20=bias20, is_red=is_red,
         buy_score=buy_score, sell_score=sell_score,
         effective_buy=effective_buy, effective_sell=effective_sell,
-        score_note="季線乖離過熱，買進分數已鎖定" if b60["locked"] else "",
+        score_note="季線乖離過熱，正向條件分數已鎖定" if b60["locked"] else "",
         max_possible=max_possible, b60=b60, regime=regime,
         trade_plan=trade_plan, pyramid=pyramid, weekly=weekly,
     )
@@ -2158,7 +2154,7 @@ def stock_html_block(name: str, ticker: str, result: dict, note: str = "") -> st
         sugg = "".join(f'<li style="margin:4px 0;font-size:13px;">{s}</li>'
                        for s in result["pyramid"]["suggestions"])
         pyramid_html = (f'<div style="background:#f0f8ff;padding:12px 16px;border-top:1px solid #d6eaf8;">'
-                        f'<div style="font-weight:bold;color:#2471a3;margin-bottom:6px;">🏗️ 金字塔建倉建議</div>'
+                        f'<div style="font-weight:bold;color:#2471a3;margin-bottom:6px;">🏗️ 分層條件觀察</div>'
                         f'<ul style="margin:0;padding-left:18px;">{sugg}</ul></div>')
 
     return (
@@ -2616,7 +2612,7 @@ def scoring_rules_html() -> str:
         ("趨勢方向", WEIGHTS["trend"], "市場主方向"),
         ("MACD動能", WEIGHTS["macd"], "漲跌動能"),
         ("三大法人", WEIGHTS["institutional"], "法人籌碼"),
-        ("KD", WEIGHTS["kd"], "進出場時機"),
+        ("KD", WEIGHTS["kd"], "條件轉折時機"),
         ("OBV", WEIGHTS["obv"], "量價配合"),
         ("台幣匯率", WEIGHTS["fx"], "台幣強弱影響外資流向與出口股獲利"),
         ("美國利率", WEIGHTS["rates"], "利率升降影響科技股評價"),
@@ -2636,9 +2632,9 @@ def scoring_rules_html() -> str:
         f'<td style="padding:7px 9px;color:#777;font-size:12px;">{note}</td>'
         f'</tr>'
         for level, note in [
-            ("提醒", "只提醒市場溫度變化，不作為實際交易依據"),
-            ("弱訊號", "只做觀察或小幅試單，不能單獨當成重倉理由"),
-            ("中訊號", "代表多項條件開始一致，可考慮分批建立或降低部位"),
+            ("提醒", "只提醒市場溫度變化，僅供條件觀察"),
+            ("弱訊號", "代表少數條件出現，不能單獨當成趨勢依據"),
+            ("中訊號", "代表多項條件開始一致，需觀察是否持續"),
             ("強訊號", "代表高權重條件共振，但仍需保留後續調整空間"),
         ]
     )
@@ -2649,8 +2645,8 @@ def scoring_rules_html() -> str:
         f'評分標準</summary>'
         f'<div style="margin-top:12px;">'
         f'<div style="font-size:13px;color:#555;line-height:1.7;margin-bottom:12px;">'
-        f'系統會分別計算買進與賣出分數，最後以「實際參考分」作為主要判斷。'
-        f'若季線乖離過熱，買進分數會被歸零，只保留背景分數讓你知道原本有哪些條件偏多。</div>'
+        f'系統會分別計算正向條件與風險條件分數，最後以「實際參考分」作為主要判斷。'
+        f'若季線乖離過熱，正向條件分數會被歸零，只保留背景分數呈現原本有哪些條件偏多。</div>'
         f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
         f'<span style="background:#eef5fb;border:1px solid #d6eaf8;border-radius:6px;padding:5px 8px;font-size:12px;white-space:nowrap;display:inline-block;">提醒 15-29</span>'
         f'<span style="background:#fef9e7;border:1px solid #f9e79f;border-radius:6px;padding:5px 8px;font-size:12px;white-space:nowrap;display:inline-block;">弱 30-49</span>'
@@ -2665,12 +2661,12 @@ def scoring_rules_html() -> str:
         f'<th style="padding:8px 9px;text-align:left;">用途</th>'
         f'</tr></thead><tbody>{weight_rows}</tbody></table>'
         f'<div style="font-size:12px;color:#777;line-height:1.6;margin-top:10px;">'
-        f'BIAS60 用來判斷中期過熱或超跌，不直接加分；過熱時會鎖住買進，避免追高。</div>'
-        f'<div style="font-weight:bold;color:#1f4e79;font-size:14px;margin:14px 0 8px;">交易訊號怎麼用</div>'
+        f'BIAS60 用來判斷中期過熱或超跌，不直接加分；過熱時會暫停計入正向條件分數，避免過度解讀。</div>'
+        f'<div style="font-weight:bold;color:#1f4e79;font-size:14px;margin:14px 0 8px;">條件訊號怎麼看</div>'
         f'<div style="font-size:13px;color:#555;line-height:1.7;margin-bottom:10px;">'
-        f'這裡說明訊號等級的用途，不代表一定要完整照比例下單。'
-        f'系統會再依市場狀態調整：大多頭少賣、空頭少買、盤整時才較適合分批操作。'
-        f'同一等級訊號連續出現時，不建議每週重複操作。</div>'
+        f'這裡說明訊號等級的用途，不代表具體交易動作或部位比例。'
+        f'系統會再依市場狀態調整條件權重，以區分趨勢、修正與盤整環境。'
+        f'同一等級訊號連續出現時，不代表市場狀態已改變。</div>'
         f'<table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5eef7;'
         f'border-radius:6px;overflow:hidden;">'
         f'<thead><tr style="background:#eaf4fb;color:#1f4e79;">'
@@ -3137,7 +3133,7 @@ def _social_indicator_tile(result: dict, label: str, title: str | None = None) -
 
 
 def _social_score_impact(note: str) -> tuple[float, float]:
-    match = re.search(r"分數影響:買進\+([0-9.]+)\/賣出\+([0-9.]+)", note or "")
+    match = re.search(r"分數影響:正向條件\+([0-9.]+)\/風險條件\+([0-9.]+)", note or "")
     if not match:
         return 0.0, 0.0
     return float(match.group(1)), float(match.group(2))
@@ -3313,7 +3309,7 @@ def _public_signal_color(result: dict) -> str:
 def _public_action_text(result: dict) -> str:
     plan = result.get("trade_plan", {})
     headline = str(plan.get("headline") or "觀察")
-    return headline.replace("不交易，觀察", "觀察")
+    return headline.replace("維持觀察", "觀察")
 
 
 def _public_news_items(news_items: list | None, limit: int = 4) -> str:
@@ -3417,7 +3413,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
             f"<div class='stock-head'><div><b>{html_lib.escape(name)}</b><span>{ticker.replace('.TW','')}</span></div>"
             f"<div class='signal-dot'><span></span></div></div>"
             f"<div class='stock-line'><span>{html_lib.escape(weekly.get('posture','觀察'))}</span><strong style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</strong></div>"
-            f"<div class='stock-action'>{html_lib.escape(_public_action_text(result))}｜買{result.get('effective_buy',0):.0f} / 賣{result.get('effective_sell',0):.0f}</div>"
+            f"<div class='stock-action'>{html_lib.escape(_public_action_text(result))}｜正向條件{result.get('effective_buy',0):.0f} / 風險條件{result.get('effective_sell',0):.0f}</div>"
             f"<p>{html_lib.escape(_social_short_text(result.get('trade_plan', {}).get('reason') or weekly.get('next_focus',''), 78))}</p>"
             f"</div>"
         )
@@ -3463,7 +3459,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
     page1 = f"""
     <div class='page'>
       <div class='top'><div><div class='kicker'>WEEKLY MARKET BRIEF</div><h1>每週台股報告</h1><div class='date'>{date_text}｜{meta['week_label']}｜免費摘要版</div></div><div class='close'><span>加權指數收盤</span><b>{market.get('close',0):.2f}</b><em style='color:{_pct_color(market_weekly.get('week_chg_pct'))}'>{pct_text(market_weekly.get('week_chg_pct'))}</em></div></div>
-      <div class='panel market-hero'><div><div class='status'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='note'>週報偏向中大型權值股與中長線布局，不作為短線追價訊號。</div></div><div class='summary'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}<div class='note'>口徑：本週漲跌為週一開盤至週五收盤；相對上週五用於觀察跳空與週線連續性。</div></div></div>
+      <div class='panel market-hero'><div><div class='status'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='note'>週報偏向中大型權值股與中長線條件觀察，不作為具體交易建議。</div></div><div class='summary'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}<div class='note'>口徑：本週漲跌為週一開盤至週五收盤；相對上週五用於觀察跳空與週線連續性。</div></div></div>
       <div class='panel chart-wrap'>{market_chart}</div>
       <div class='panel'><h2>宏觀指標</h2><div class='metric-grid'><div class='metric'><span>法人週累計（金額）</span><b style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</b>{render_sparkline(inst_series, 170, 34)}<p>{html_lib.escape(_social_short_text(inst_note, 62))}</p></div><div class='metric'><span>美元/台幣</span><b>{fx_value}</b>{render_sparkline(fx_series, 170, 34)}<p>{html_lib.escape(_social_short_text(fx_note, 62))}</p></div><div class='metric'><span>美10年債</span><b>{rates_value}</b>{render_sparkline(rates_series, 170, 34)}<p>{html_lib.escape(_social_short_text(rates_note, 62))}</p></div></div></div>
       <div class='page1-grid'><div class='panel'><h2>重大事件</h2><div class='twocol'>{_public_event_items(event_items, today, 4)}</div></div>
@@ -3475,7 +3471,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
       <div class='top'><div><div class='kicker'>LARGE CAP MAP</div><h1>權值股總覽</h1><div class='date'>{date_text}｜依本週漲跌排序</div></div></div>
       <div class='panel'><h2>本週漲跌排名</h2>{ranking}</div>
       <div class='panel'><h2>8 檔追蹤標的</h2><div class='stock-grid'>{stock_cards}</div></div>
-      <div class='footer'>信號燈為週報趨勢分層，買賣分數只代表模型強弱，不代表每日交易指令。</div>
+      <div class='footer'>信號燈為週報趨勢分層，正向條件與風險條件分數只代表模型觀察結果。</div>
     </div>"""
     page3 = f"""
     <div class='page'>
@@ -3487,7 +3483,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
     <div class='page'>
       <div class='top'><div><div class='kicker'>KEY INDICATORS</div><h1>修正與觀察標的雷達</h1><div class='date'>{date_text}｜量能、OBV、KD、MACD</div></div></div>
       {detail_pages[1] if len(detail_pages) > 1 else ''}
-      <div class='footer'>同一弱訊號連續出現時，不建議每週重複操作；只有訊號升級或條件改變再重新評估。</div>
+      <div class='footer'>同一弱訊號連續出現時，不代表狀態改變；只有訊號升級或條件改變再重新評估。</div>
     </div>"""
     return f"<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body>{page1}{page2}{page3}{page4}</body></html>"
 
