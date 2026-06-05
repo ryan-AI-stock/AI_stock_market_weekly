@@ -149,16 +149,6 @@ def _parse_float(value) -> float | None:
         return None
 
 
-def _parse_float(value) -> float | None:
-    try:
-        raw = str(value).replace(",", "").replace(" ", "").strip()
-        if raw in ("", "--", "-"):
-            return None
-        return float(raw)
-    except Exception:
-        return None
-
-
 def _find_field(fields: list, *keywords: str) -> int | None:
     for idx, field in enumerate(fields):
         if all(keyword in field for keyword in keywords):
@@ -1407,6 +1397,7 @@ def format_ratio_value(value: float) -> str:
 
 
 # ── 評估訊號 ────────────────────────────────────────────────
+# Deprecated：舊版未加權評估器暫時保留供參考；正式週報使用 evaluate_weighted()。
 def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
     thr        = scfg["thresholds"]
     ma         = scfg["ma_periods"]
@@ -3029,6 +3020,7 @@ def weekly_stock_detail_block(name: str, ticker: str, result: dict) -> str:
 
 
 # ── 組裝 HTML Email ──────────────────────────────────────────
+# 保留 Email 路徑：目前可停用，但不可在重構時移除。
 def build_email_html(results: list, today: str, cfg: dict | None = None,
                      macro: dict | None = None, news_items: list | None = None,
                      event_items: list | None = None) -> str:
@@ -3938,6 +3930,7 @@ def run_schedule_gate() -> None:
 
 
 # ── 發送 Email ───────────────────────────────────────────────
+# 保留 Email 路徑：Drive PDF 維持主要發布管道。
 def send_email(cfg: dict, html: str, today: str) -> bool:
     if not cfg.get("email", {}).get("enabled", False):
         print("Email 發送已關閉，略過寄信")
