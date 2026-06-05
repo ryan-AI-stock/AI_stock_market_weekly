@@ -6,13 +6,13 @@ Repository : github.com/ryanhsu1983/AI_stock_market_weekly
 """
 
 import html as html_lib
-import os, re, sys
+import os, re, sys, requests
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote_plus
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from weekly_drive_client import build_google_drive_service, drive_name_query, upload_file_to_drive
