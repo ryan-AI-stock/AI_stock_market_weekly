@@ -17,6 +17,12 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from weekly_drive_settings import (
+    in_acceptance_drive_mode,
+    resolve_backup_drive_folder_id,
+    resolve_public_report_file_id,
+    resolve_public_report_folder_id,
+)
 from weekly_runtime import env_flag, load_config_file, write_github_output
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -3364,12 +3370,7 @@ def _drive_name_query(name: str) -> str:
 
 def get_drive_target_folder_id(service, cfg: dict, report_meta: dict, create: bool = False) -> str | None:
     drive_cfg = cfg.get("drive_report", {})
-    folder_id = (
-        os.environ.get("REPORT_TEST_DRIVE_FOLDER_ID")
-        or os.environ.get("WEEKLY_REPORT_DRIVE_FOLDER_ID")
-        or os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
-        or drive_cfg.get("folder_id")
-    )
+    folder_id = resolve_backup_drive_folder_id(drive_cfg)
     if not folder_id:
         return None
 
@@ -3613,26 +3614,18 @@ def upload_public_report_file(file_path: Path | None, cfg: dict) -> str | None:
     public_cfg = cfg.get("public_report", {})
     if not public_cfg.get("enabled", False):
         return None
-    test_folder_id = os.environ.get("REPORT_TEST_DRIVE_FOLDER_ID", "").strip()
-    folder_id = (
-        test_folder_id
-        or os.environ.get("PUBLIC_REPORT_DRIVE_FOLDER_ID")
-        or os.environ.get("WEEKLY_PUBLIC_REPORT_DRIVE_FOLDER_ID")
-        or public_cfg.get("folder_id")
-    )
+    folder_id = resolve_public_report_folder_id(public_cfg)
     if not folder_id:
         print("⚠️  未設定免費版 Google Drive folder_id，跳過上傳固定 PDF")
         return None
-    file_id = "" if test_folder_id else (
-        os.environ.get("PUBLIC_REPORT_DRIVE_FILE_ID") or public_cfg.get("fixed_file_id") or ""
-    )
+    file_id = resolve_public_report_file_id(public_cfg)
     uploaded = upload_file_to_drive(
         file_path,
         folder_id,
         "application/pdf",
         file_name=public_cfg.get("fixed_file_name", "每週台股報告.pdf"),
         make_public=bool(public_cfg.get("make_public", True)),
-        file_id=file_id.strip() or None,
+        file_id=file_id or None,
     )
     return uploaded.get("webViewLink") if uploaded else None
 
@@ -3744,7 +3737,7 @@ def main():
         f"[{now_tw.strftime('%Y-%m-%d %H:%M')}] 週報目標交易日={expected_date}，"
         f"開始每週趨勢分析，共 {len(cfg['watchlist'])} 檔"
     )
-    if os.environ.get("REPORT_TEST_DRIVE_FOLDER_ID", "").strip():
+    if in_acceptance_drive_mode():
         print("  驗收發布模式：固定 PDF 與日期備份將上傳至測試資料夾，不使用正式固定 file_id")
     if force_run:
         print("  force_run=true，忽略同週既有檔案檢查，強制重新產生並更新 PDF")
