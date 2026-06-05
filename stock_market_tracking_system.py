@@ -17,6 +17,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from weekly_drive_client import build_google_drive_service, drive_name_query, upload_file_to_drive
 from weekly_drive_settings import (
     in_acceptance_drive_mode,
     resolve_backup_drive_folder_id,
@@ -3324,51 +3325,6 @@ def render_report_pdf(html_path: Path, output_name: str, prefer_css_page_size: b
         return None
 
 
-def _build_google_drive_credentials():
-    scopes = ["https://www.googleapis.com/auth/drive"]
-    refresh_token = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN", "").strip()
-    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
-    if refresh_token and client_id and client_secret:
-        try:
-            from google.oauth2.credentials import Credentials
-            from google.auth.transport.requests import Request
-            credentials = Credentials(
-                token=None,
-                refresh_token=refresh_token,
-                token_uri="https://oauth2.googleapis.com/token",
-                client_id=client_id,
-                client_secret=client_secret,
-                scopes=scopes,
-            )
-            credentials.refresh(Request())
-            return credentials, "OAuth"
-        except Exception as exc:
-            msg = str(exc)
-            if "invalid_grant" in msg or "expired" in msg.lower() or "revoked" in msg.lower():
-                print("⚠️  Google OAuth refresh token 已失效或被撤銷，請重新授權並更新 GitHub secret GOOGLE_OAUTH_REFRESH_TOKEN")
-            print(f"⚠️  Google OAuth 憑證失敗：{exc}")
-
-    return None, ""
-
-
-def build_google_drive_service():
-    try:
-        from googleapiclient.discovery import build
-    except Exception as exc:
-        print(f"⚠️  未安裝 Google Drive API 套件：{exc}")
-        return None, ""
-
-    credentials, auth_mode = _build_google_drive_credentials()
-    if not credentials:
-        return None, ""
-    return build("drive", "v3", credentials=credentials, cache_discovery=False), auth_mode
-
-
-def _drive_name_query(name: str) -> str:
-    return name.replace("\\", "\\\\").replace("'", "\\'")
-
-
 def get_drive_target_folder_id(service, cfg: dict, report_meta: dict, create: bool = False) -> str | None:
     drive_cfg = cfg.get("drive_report", {})
     folder_id = resolve_backup_drive_folder_id(drive_cfg)
@@ -3379,7 +3335,7 @@ def get_drive_target_folder_id(service, cfg: dict, report_meta: dict, create: bo
         name = str(raw_name).format(**report_meta)
         query = (
             f"'{folder_id}' in parents and "
-            f"name = '{_drive_name_query(name)}' and "
+            f"name = '{drive_name_query(name)}' and "
             "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
         existing = service.files().list(
@@ -3428,7 +3384,7 @@ def drive_file_exists(file_name: str, cfg: dict) -> bool:
     try:
         query = (
             f"'{folder_id}' in parents and "
-            f"name = '{_drive_name_query(file_name)}' and "
+            f"name = '{drive_name_query(file_name)}' and "
             "trashed = false"
         )
         existing = service.files().list(
@@ -3471,7 +3427,7 @@ def upload_report_image_to_drive(image_path: Path, today: str, cfg: dict) -> str
         media = MediaFileUpload(str(image_path), mimetype="image/png", resumable=False)
         query = (
             f"'{folder_id}' in parents and "
-            f"name = '{_drive_name_query(file_name)}' and "
+            f"name = '{drive_name_query(file_name)}' and "
             "trashed = false"
         )
         existing = service.files().list(
@@ -3500,81 +3456,6 @@ def upload_report_image_to_drive(image_path: Path, today: str, cfg: dict) -> str
     except Exception as exc:
         print(f"⚠️  上傳 Google Drive 失敗：{exc}")
         return None
-
-
-def upload_file_to_drive(file_path: Path, folder_id: str, mime_type: str,
-                         file_name: str | None = None, make_public: bool = False,
-                         file_id: str | None = None) -> dict | None:
-    try:
-        from googleapiclient.http import MediaFileUpload
-    except Exception as exc:
-        print(f"⚠️  未安裝 Google Drive API 套件，跳過上傳：{exc}")
-        return None
-
-    service, auth_mode = build_google_drive_service()
-    if not service:
-        print("⚠️  未設定 Google OAuth 憑證，已保留本機 PDF 但跳過上傳")
-        return None
-    name = file_name or file_path.name
-    try:
-        print(f"使用 Google Drive {auth_mode} 憑證上傳 PDF")
-        media = MediaFileUpload(str(file_path), mimetype=mime_type, resumable=False)
-        target = None
-        if file_id:
-            try:
-                target = service.files().get(
-                    fileId=file_id,
-                    fields="id,name,webViewLink",
-                    supportsAllDrives=True,
-                ).execute()
-            except Exception as exc:
-                print(f"⚠️  固定 file_id 無法讀取，改用檔名搜尋：{exc}")
-        if not target:
-            query = (
-                f"'{folder_id}' in parents and "
-                f"name = '{_drive_name_query(name)}' and "
-                "trashed = false"
-            )
-            existing = service.files().list(
-                q=query,
-                fields="files(id,name,webViewLink)",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-            ).execute().get("files", [])
-            target = existing[0] if existing else None
-
-        if target:
-            uploaded = service.files().update(
-                fileId=target["id"],
-                media_body=media,
-                fields="id,name,webViewLink",
-                supportsAllDrives=True,
-            ).execute()
-            print(f"已更新 Google Drive PDF：{uploaded.get('name')}｜file_id={uploaded.get('id')}")
-        else:
-            uploaded = service.files().create(
-                body={"name": name, "parents": [folder_id]},
-                media_body=media,
-                fields="id,name,webViewLink",
-                supportsAllDrives=True,
-            ).execute()
-            print(f"已建立 Google Drive PDF：{uploaded.get('name')}｜file_id={uploaded.get('id')}")
-
-        if make_public:
-            try:
-                service.permissions().create(
-                    fileId=uploaded["id"],
-                    body={"type": "anyone", "role": "reader"},
-                    supportsAllDrives=True,
-                ).execute()
-            except Exception as exc:
-                print(f"⚠️  設定公開讀取失敗，請確認 Drive 權限：{exc}")
-        return uploaded
-    except Exception as exc:
-        print(f"⚠️  上傳 Google Drive PDF 失敗：{exc}")
-        return None
-
-
 def upload_report_file_to_drive(file_path: Path, today: str, cfg: dict,
                                 file_name: str | None = None,
                                 mime_type: str = "application/pdf") -> str | None:
