@@ -6,7 +6,7 @@ Repository : github.com/ryanhsu1983/AI_stock_market_weekly
 """
 
 import html as html_lib
-import json, os, re, smtplib, sys, requests
+import os, re, smtplib, sys, requests
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote_plus
@@ -16,6 +16,8 @@ from datetime import date, datetime, timedelta, timezone, time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
+
+from weekly_runtime import env_flag, load_config_file, write_github_output
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -90,8 +92,7 @@ TRADE_BASE_PCTS = {
 
 # ── 讀取設定 ────────────────────────────────────────────────
 def load_config() -> dict:
-    with open(Path(__file__).parent / "config.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+    return load_config_file()
 
 
 def get_stock_cfg(stock: dict, global_cfg: dict) -> dict:
@@ -1397,248 +1398,6 @@ def format_ratio_value(value: float) -> str:
 
 
 # ── 評估訊號 ────────────────────────────────────────────────
-# Deprecated：舊版未加權評估器暫時保留供參考；正式週報使用 evaluate_weighted()。
-def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
-    thr        = scfg["thresholds"]
-    ma         = scfg["ma_periods"]
-    use_obv    = scfg.get("use_obv", True)
-    use_vol    = scfg.get("use_vol_trend", True)
-    lev_warn   = scfg.get("leverage_warning", False)
-    s, m, l    = ma["short"], ma["mid"], ma["long"]
-
-    latest = df.iloc[-1]
-    prev   = df.iloc[-2]
-
-    close     = float(latest["Close"])
-    ma_s      = float(latest[f"MA{s}"])
-    ma_m      = float(latest[f"MA{m}"])
-    ma_l      = float(latest[f"MA{l}"])
-    ma_s_prev = float(prev[f"MA{s}"])
-    ma_m_prev = float(prev[f"MA{m}"])
-    ma_l_prev = float(prev[f"MA{l}"])
-    k, d      = float(latest["K"]),        float(latest["D"])
-    kp, dp    = float(prev["K"]),          float(prev["D"])
-    hist      = float(latest["MACD_hist"])
-    hist_p    = float(prev["MACD_hist"])
-    bias20    = float(latest["Bias20"])
-    vol       = float(latest["Volume"])
-    vol_ma    = float(latest["Vol_MA"])
-    vol_trend = float(latest["Vol_Trend"])
-    obv       = float(latest["OBV"])
-    obv_ma    = float(latest["OBV_MA"])
-    obv_prev  = float(prev["OBV"])
-
-    items  = []
-    l2_buy = l2_sell = 0
-
-    # 槓桿ETF警示標籤
-    if lev_warn:
-        items.append(("⚠️ 槓桿警示", "每日重置ETF，不適合長期持有", "#e67e22",
-                      "槓桿ETF有長期耗損效應，短期波動與風險較高"))
-
-    # ── BIAS60 Z-Score ────────────────────────────────────────
-    b60 = eval_bias60(df, scfg)
-    items.append(("BIAS60 Z-Score", b60["label"], b60["color"], b60["note"]))
-
-    # ── 第一層：趨勢環境 ──────────────────────────────────────
-    ma_s_dir   = ma_s > ma_s_prev
-    above_ma_s = close > ma_s
-
-    if ma_m > ma_l and above_ma_s and ma_s_dir:     trend = "healthy_bull"
-    elif ma_m > ma_l and (not above_ma_s or not ma_s_dir): trend = "weak_bull"
-    elif ma_m < ma_l:                                trend = "bear"
-    else:                                            trend = "neutral"
-
-    trend_label = {"healthy_bull":"多頭健康","weak_bull":"多頭轉弱",
-                   "bear":"空頭確認","neutral":"方向不明"}[trend]
-    trend_color = {"healthy_bull":"#2ecc71","weak_bull":"#f39c12",
-                   "bear":"#e74c3c","neutral":"#95a5a6"}[trend]
-    items.append(("趨勢環境", trend_label, trend_color,
-                  f"MA{s}={ma_s:.1f}｜MA{m}={ma_m:.1f}｜MA{l}={ma_l:.1f}｜"
-                  f"收盤{'站上' if above_ma_s else '跌破'}{s}日線（{s}日線{'向上' if ma_s_dir else '向下'}）｜"
-                  f"多頭健康：MA{m}>MA{l} 且收盤站上{s}日線｜"
-                  f"多頭轉弱：MA{m}>MA{l} 但跌破{s}日線或{s}日線轉向｜"
-                  f"空頭確認：MA{m}<MA{l}"))
-    # ── 第二層：時機指標 ──────────────────────────────────────
-
-    # MACD
-    # 計算歷史MACD柱狀範圍供參考
-    hist_series = df["MACD_hist"].dropna()
-    hist_p10 = float(hist_series.quantile(0.10))
-    hist_p90 = float(hist_series.quantile(0.90))
-    macd_range_note = f"當前={hist:.4f}｜歷史正常區間[{hist_p10:.4f}～{hist_p90:.4f}]｜正=多頭動能，負=空頭動能，0軸為中性"
-    if hist > 0 and hist_p <= 0:
-        l2_buy += 1
-        items.append(("MACD", "柱狀由負翻正 ✅", "#2ecc71", macd_range_note + "｜剛翻正，動能轉強"))
-    elif hist < 0 and hist_p >= 0:
-        l2_sell += 1
-        items.append(("MACD", "柱狀由正翻負 ⚠️", "#e74c3c", macd_range_note + "｜剛翻負，動能轉弱"))
-    else:
-        sign = "正（多頭）" if hist > 0 else "負（空頭）"
-        items.append(("MACD", f"柱狀持續為{sign}", "#95a5a6", macd_range_note))
-
-    # KD（使用個股門檻）
-    kd_buy  = k > d and kp <= dp and k < thr["kd_buy"]
-    kd_sell = k < d and kp >= dp and k > thr["kd_sell"]
-    kd_note = (f"當前 K={k:.1f} D={d:.1f}｜"
-               f"低檔正向交叉區：K<{thr['kd_buy']}且K上穿D｜"
-               f"高檔風險交叉區：K>{thr['kd_sell']}且K下穿D｜"
-               f"正常區間：{thr['kd_buy']}～{thr['kd_sell']}")
-    if kd_buy:
-        l2_buy += 1
-        items.append(("KD", "低檔黃金交叉 ✅", "#2ecc71", kd_note))
-    elif kd_sell:
-        l2_sell += 1
-        items.append(("KD", "高檔死亡交叉 ⚠️", "#e74c3c", kd_note))
-    else:
-        items.append(("KD", "無交叉訊號", "#95a5a6", kd_note))
-
-    # 短線乖離率（使用個股門檻）
-    b20_buy  = thr.get("bias20_buy",  thr.get("bias_buy",  -4.0))
-    b20_sell = thr.get("bias20_sell", thr.get("bias_sell",  5.0))
-    bias20_note = (f"當前={bias20:.2f}%（收盤偏離MA{m}的幅度）｜"
-                   f"正常區間：{b20_buy}%～+{b20_sell}%｜"
-                   f"低於{b20_buy}%=跌深正向條件區，高於+{b20_sell}%=漲多風險條件區")
-    if bias20 < b20_buy:
-        l2_buy += 1
-        items.append(("乖離率(MA{})".format(m), "跌深反彈機會 ✅", "#2ecc71", bias20_note))
-    elif bias20 > b20_sell:
-        l2_sell += 1
-        items.append(("乖離率(MA{})".format(m), "漲幅過高警示 ⚠️", "#e74c3c", bias20_note))
-    else:
-        items.append(("乖離率(MA{})".format(m), "正常範圍", "#95a5a6", bias20_note))
-
-    # 均線交叉
-    ma_bull = ma_m > ma_l and ma_m_prev <= ma_l_prev
-    ma_bear = ma_m < ma_l and ma_m_prev >= ma_l_prev
-    ma_note = (f"MA{s}={ma_s:.1f}｜MA{m}={ma_m:.1f}｜MA{l}={ma_l:.1f}｜"
-               f"MA{m}>MA{l}=多頭排列，MA{m}<MA{l}=空頭排列｜"
-               f"剛發生交叉才觸發訊號，持續排列為中性")
-    if ma_bull:
-        l2_buy += 1
-        items.append(("均線交叉", f"MA{m}上穿MA{l} ✅", "#2ecc71", ma_note + "｜趨勢剛確立"))
-    elif ma_bear:
-        l2_sell += 1
-        items.append(("均線交叉", f"MA{m}下穿MA{l} ⚠️", "#e74c3c", ma_note + "｜趨勢剛反轉"))
-    else:
-        rel = ">" if ma_m > ma_l else "<"
-        status = "多頭排列持續" if ma_m > ma_l else "空頭排列持續"
-        items.append(("均線交叉", status, "#95a5a6", ma_note))
-
-    # 量能趨勢（可關閉）
-    vol_ratio = vol / vol_ma if vol_ma > 0 else 1
-    if use_vol:
-        vol_note = (f"最新成交量／{thr['vol_ma_period']}日均量={vol_ratio:.2f}倍｜"
-                    f"正常範圍：0.8～1.2倍｜"
-                    f">1.2倍且價漲=量能擴張買訊，<0.8倍=量能萎縮警示")
-        if vol_trend > 0 and vol_ratio > 1.2:
-            vol_label, vol_color = "量能擴張 ✅", "#2ecc71"
-            if close > float(prev["Close"]): l2_buy += 1
-        elif vol_trend < 0 and vol_ratio < 0.8:
-            vol_label, vol_color = "量能萎縮 ⚠️", "#e74c3c"
-        else:
-            vol_label, vol_color = "量能平穩", "#95a5a6"
-        items.append(("量能趨勢", vol_label, vol_color, vol_note))
-    else:
-        items.append(("量能趨勢", "已關閉（槓桿ETF不適用）", "#bdc3c7",
-                      "槓桿ETF成交量主要來自當沖套利，無法反映真實多空"))
-
-    # OBV（可關閉）
-    if use_obv:
-        obv_rising  = obv > obv_ma and obv > obv_prev
-        obv_falling = obv < obv_ma and obv < obv_prev
-        price_up    = close > float(prev["Close"])
-        obv_note = (f"OBV={'高於' if obv>obv_ma else '低於'}{thr['obv_ma_period']}日均線｜"
-                    f"OBV持續累積=資金偏流入，OBV持續下滑=資金偏流出｜"
-                    f"OBV領先價格=強力買訊，價漲OBV跌=背離警示")
-        if obv_rising and price_up:
-            obv_label, obv_color = "量價齊揚 ✅",    "#2ecc71"; l2_buy  += 1
-        elif obv_rising and not price_up:
-            obv_label, obv_color = "OBV領先價格", "#3498db"
-        elif obv_falling and not price_up:
-            obv_label, obv_color = "量價齊跌 ⚠️",   "#e74c3c"; l2_sell += 1
-        elif obv_falling and price_up:
-            obv_label, obv_color = "價漲量縮背離 ⚠️","#f39c12"
-        else:
-            obv_label, obv_color = "OBV中性",        "#95a5a6"
-        items.append(("OBV", obv_label, obv_color, obv_note))
-    else:
-        items.append(("OBV", "已關閉（槓桿ETF不適用）", "#bdc3c7",
-                      "槓桿ETF成交量結構特殊，OBV訊號不具參考價值"))
-
-    # 價格行為
-    is_red   = close > float(latest["Open"])
-    open_p   = float(latest["Open"])
-    chg_pct  = (close - open_p) / open_p * 100
-    price_note = (f"開盤={open_p:.2f}｜收盤={close:.2f}｜當日漲跌={chg_pct:+.2f}%｜"
-                  f"紅K：收盤>開盤，買方強勢｜黑K：收盤<開盤，賣方強勢｜"
-                  f"長上影線：上漲被壓回，賣壓重｜長下影線：下跌被撐回，買盤強")
-    items.append(("價格行為",
-                  f"紅K（+{chg_pct:.2f}%）" if is_red else f"黑K（{chg_pct:.2f}%）",
-                  "#2ecc71" if is_red else "#e74c3c",
-                  price_note))
-
-    # ── 綜合訊號 ──────────────────────────────────────────────
-    if b60["locked"]:
-        if l2_sell >= 2 or trend == "bear":
-            level, emoji, summary = "STRONG_SELL", "🔵", "風險條件較完整"
-            advice = "市場過熱且技術面轉弱，風險條件增加"
-            bg, border = "#eaf4fb", "#3498db"
-        else:
-            level, emoji, summary = "OVERHEATED", "🔥", "過熱鎖定｜追價風險偏高"
-            advice = (f"季線乖離{b60['bias60']:.1f}%超過歷史{scfg['thresholds'].get('bias60_p_high',95)}%分位"
-                      f"({b60['p_high']:.1f}%)，Z={b60['z_score']:.2f}，正向條件暫停計入")
-            bg, border = "#fdecea", "#c0392b"
-
-    elif b60["zone"] == "oversold":
-        if trend in ("healthy_bull","weak_bull") and l2_buy >= 1:
-            level, emoji, summary = "STRONG_BUY", "🔴", "正向條件較完整（超跌觀察區）"
-            advice = (f"季線乖離{b60['bias60']:.1f}%低於歷史{scfg['thresholds'].get('bias60_p_low',5)}%分位"
-                      f"({b60['p_low']:.1f}%)，統計超跌，正向條件較完整")
-            bg, border = "#fdecea", "#e74c3c"
-        else:
-            level, emoji, summary = "WEAK_BUY", "🟡", "超跌觀察區"
-            advice = "季線乖離統計超跌，但技術面尚未確認，可列入觀察"
-            bg, border = "#fef9e7", "#f39c12"
-
-    else:
-        if trend == "healthy_bull" and l2_buy >= 2:
-            level, emoji, summary = "STRONG_BUY",  "🔴", "正向條件較完整"
-            advice = "多頭健康，多項正向條件共振"
-            bg, border = "#fdecea", "#e74c3c"
-        elif (trend == "healthy_bull" and l2_buy == 1) or \
-             (trend == "weak_bull"    and l2_buy >= 2):
-            level, emoji, summary = "WEAK_BUY",    "🟡", "正向條件成立"
-            advice = "單一訊號或趨勢轉弱，僅列入觀察"
-            bg, border = "#fef9e7", "#f39c12"
-        elif trend in ("weak_bull","healthy_bull") and not ma_s_dir:
-            level, emoji, summary = "WARNING",     "🟠", "風險警示"
-            advice = f"{s}日線走弱，風險條件增加"
-            bg, border = "#fef5e7", "#e67e22"
-        elif trend == "bear" and l2_sell >= 2:
-            level, emoji, summary = "STRONG_SELL", "🔵", "風險條件較完整"
-            advice = "空頭確認，多項風險條件共振"
-            bg, border = "#eaf4fb", "#3498db"
-        elif trend == "neutral":
-            level, emoji, summary = "NEUTRAL",     "⚪", "方向不明"
-            advice = "均線糾結或訊號矛盾，維持觀察"
-            bg, border = "#f8f9fa", "#95a5a6"
-        else:
-            level, emoji, summary = "NEUTRAL",     "⚪", "無明顯訊號"
-            advice = "目前條件不足，繼續觀察"
-            bg, border = "#f8f9fa", "#95a5a6"
-
-    pyramid = calc_pyramid(df, scfg, level)
-
-    return dict(
-        level=level, emoji=emoji, summary=summary, advice=advice,
-        bg=bg, border=border, items=items,
-        close=close, bias20=bias20, is_red=is_red,
-        l2_buy=l2_buy, l2_sell=l2_sell,
-        b60=b60, pyramid=pyramid,
-    )
-
-
 def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
                       macro: dict | None = None, inst_week: dict | None = None) -> dict:
     thr = scfg["thresholds"]
@@ -3435,7 +3194,7 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
       .kicker{{font-size:12px;font-weight:900;color:#b8871b;letter-spacing:.12em}} h1{{font-size:32px;line-height:1.08;margin:4px 0 0;color:{WEEKLY_DARK}}}
       .date{{font-size:14px;color:#6e746f;margin-top:5px}} .close{{text-align:right}} .close span{{display:block;color:#6e746f;font-size:13px}} .close b{{font-size:34px;line-height:1.05}} .close em{{display:block;font-style:normal;font-size:21px;font-weight:900}}
       .panel{{background:#fffdf7;border:1px solid #ded4b8;border-radius:13px;padding:13px 15px;margin-bottom:11px}}
-      .market-hero{{display:grid;grid-template-columns:190px 1fr;gap:16px;align-items:stretch}} .status{{font-size:34px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)};line-height:1.05}} .summary{{font-size:16px;line-height:1.48;color:#31423a}} .note{{font-size:12px;color:#59665f;background:#f7efdc;border-left:5px solid {WEEKLY_GOLD};padding:7px 9px;margin-top:7px}}
+      .market-hero{{display:grid;grid-template-columns:190px 1fr;gap:16px;align-items:stretch}} .status{{font-size:34px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)};line-height:1.05}} .summary{{font-size:16px;line-height:1.48;color:#31423a}} .note{{font-size:12px;color:#59665f;background:#f7efdc;border-left:5px solid {WEEKLY_GOLD};padding:7px 9px;margin-top:7px}} .hero-note{{margin-top:0;line-height:1.55}} .hero-note b{{display:block;font-size:15px;color:{WEEKLY_DARK};margin-bottom:4px}}
       .chart-wrap{{padding:8px 10px 6px}} .chart-wrap svg{{display:block;max-width:100%;height:auto}} .page1-grid{{display:grid;grid-template-columns:1fr 1fr;gap:11px}}
       .metric-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}} .metric{{background:#f4edd9;border-radius:11px;padding:10px 11px;min-height:104px}} .metric span{{font-size:12px;color:#747d77}} .metric b{{display:block;font-size:21px;margin-top:2px}} .metric p{{font-size:11px;line-height:1.32;color:#5f6b64;margin:3px 0 0}}
       h2{{font-size:22px;margin:0 0 8px;color:{WEEKLY_DARK}}} .twocol{{display:grid;grid-template-columns:1fr 1fr;gap:9px}} .page1-grid .twocol{{grid-template-columns:1fr;gap:7px}}
@@ -3445,13 +3204,23 @@ def build_public_report_html(results: list, today: str, cfg: dict | None = None,
       .detail-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:8px solid var(--c);border-radius:12px;padding:11px 13px;margin-bottom:10px;min-height:262px}} .detail-top{{display:flex;justify-content:space-between;gap:12px}} .detail-top b{{font-size:21px}} .detail-top span{{display:block;color:#758078;font-size:11px;margin-top:2px}} .detail-top strong{{display:block;font-size:21px;text-align:right}} .detail-top em{{display:block;font-style:normal;text-align:right;font-weight:900;font-size:14px}} .detail-reason{{font-size:12px;line-height:1.4;color:#4d5c55;margin:7px 0 8px}}
       .radar-grid{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}} .radar-tile{{background:#f4edd9;border-radius:8px;padding:7px;min-height:68px}} .radar-label{{font-size:10px;color:#747d77}} .radar-value{{font-size:12px;font-weight:900;margin-top:2px;line-height:1.2}} .radar-note{{font-size:9px;color:#66736b;line-height:1.22;margin-top:3px}}
       .footer{{font-size:11px;text-align:center;color:#8a806b;margin-top:7px}}
+      @media screen {{
+        body{{overflow-x:hidden}}
+        .page{{width:100vw;max-width:900px;height:auto;min-height:1260px;padding:28px clamp(18px,3.8vw,34px)}}
+      }}
+      @media screen and (max-width:760px) {{
+        .top{{gap:14px}} .close b{{font-size:26px}} .close em{{font-size:17px}}
+        .market-hero{{grid-template-columns:1fr;gap:10px}} .status{{font-size:30px}}
+        .metric-grid,.stock-grid,.page1-grid{{grid-template-columns:1fr}}
+        .radar-grid{{grid-template-columns:1fr 1fr}}
+      }}
     </style>
     """
 
     page1 = f"""
     <div class='page'>
       <div class='top'><div><div class='kicker'>WEEKLY MARKET BRIEF</div><h1>每週台股報告</h1><div class='date'>{date_text}｜{meta['week_label']}｜免費摘要版</div></div><div class='close'><span>加權指數收盤</span><b>{market.get('close',0):.2f}</b><em style='color:{_pct_color(market_weekly.get('week_chg_pct'))}'>{pct_text(market_weekly.get('week_chg_pct'))}</em></div></div>
-      <div class='panel market-hero'><div><div class='status'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='note'>週報偏向中大型權值股與中長線條件觀察，不作為具體交易建議。</div></div><div class='summary'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}<div class='note'>口徑：本週漲跌為週一開盤至週五收盤；相對上週五用於觀察跳空與週線連續性。</div></div></div>
+      <div class='panel market-hero'><div class='status'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='note hero-note'><b>{html_lib.escape(market_weekly.get('trend_summary',''))}</b>{html_lib.escape(market_weekly.get('next_focus',''))}｜週報偏向中大型權值股與中長線條件觀察，不作為具體交易建議。口徑：本週漲跌為週一開盤至週五收盤；相對上週五用於觀察跳空與週線連續性。</div></div>
       <div class='panel chart-wrap'>{market_chart}</div>
       <div class='panel'><h2>宏觀指標</h2><div class='metric-grid'><div class='metric'><span>法人週累計（金額）</span><b style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</b>{render_sparkline(inst_series, 170, 34)}<p>{html_lib.escape(_social_short_text(inst_note, 62))}</p></div><div class='metric'><span>美元/台幣</span><b>{fx_value}</b>{render_sparkline(fx_series, 170, 34)}<p>{html_lib.escape(_social_short_text(fx_note, 62))}</p></div><div class='metric'><span>美10年債</span><b>{rates_value}</b>{render_sparkline(rates_series, 170, 34)}<p>{html_lib.escape(_social_short_text(rates_note, 62))}</p></div></div></div>
       <div class='page1-grid'><div class='panel'><h2>重大事件</h2><div class='twocol'>{_public_event_items(event_items, today, 4)}</div></div>
@@ -3596,7 +3365,8 @@ def _drive_name_query(name: str) -> str:
 def get_drive_target_folder_id(service, cfg: dict, report_meta: dict, create: bool = False) -> str | None:
     drive_cfg = cfg.get("drive_report", {})
     folder_id = (
-        os.environ.get("WEEKLY_REPORT_DRIVE_FOLDER_ID")
+        os.environ.get("REPORT_TEST_DRIVE_FOLDER_ID")
+        or os.environ.get("WEEKLY_REPORT_DRIVE_FOLDER_ID")
         or os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
         or drive_cfg.get("folder_id")
     )
@@ -3843,15 +3613,19 @@ def upload_public_report_file(file_path: Path | None, cfg: dict) -> str | None:
     public_cfg = cfg.get("public_report", {})
     if not public_cfg.get("enabled", False):
         return None
+    test_folder_id = os.environ.get("REPORT_TEST_DRIVE_FOLDER_ID", "").strip()
     folder_id = (
-        os.environ.get("PUBLIC_REPORT_DRIVE_FOLDER_ID")
+        test_folder_id
+        or os.environ.get("PUBLIC_REPORT_DRIVE_FOLDER_ID")
         or os.environ.get("WEEKLY_PUBLIC_REPORT_DRIVE_FOLDER_ID")
         or public_cfg.get("folder_id")
     )
     if not folder_id:
         print("⚠️  未設定免費版 Google Drive folder_id，跳過上傳固定 PDF")
         return None
-    file_id = os.environ.get("PUBLIC_REPORT_DRIVE_FILE_ID") or public_cfg.get("fixed_file_id") or ""
+    file_id = "" if test_folder_id else (
+        os.environ.get("PUBLIC_REPORT_DRIVE_FILE_ID") or public_cfg.get("fixed_file_id") or ""
+    )
     uploaded = upload_file_to_drive(
         file_path,
         folder_id,
@@ -3907,17 +3681,13 @@ def validate_complete_report_results(results: list, watchlist: list, expected_da
 
 
 def _write_github_output(name: str, value: str) -> None:
-    output_path = os.environ.get("GITHUB_OUTPUT", "").strip()
-    if output_path:
-        with open(output_path, "a", encoding="utf-8") as output_file:
-            output_file.write(f"{name}={value}\n")
-    print(f"{name}={value}")
+    write_github_output(name, value)
 
 
 def run_schedule_gate() -> None:
     cfg = load_config()
     now_tw = datetime.now(TAIPEI_TZ)
-    force_run = os.environ.get("FORCE_RUN_REPORT", "").strip().lower() in ("1", "true", "yes", "y")
+    force_run = env_flag("FORCE_RUN_REPORT")
     target_date = resolve_report_target(now_tw, force_run)
     backup_pdf_name = f"每週台股報告_{target_date.strftime('%Y%m%d')}.pdf"
     should_run = force_run or not drive_file_exists(backup_pdf_name, cfg)
@@ -3964,7 +3734,7 @@ def send_email(cfg: dict, html: str, today: str) -> bool:
 def main():
     cfg   = load_config()
     now_tw = datetime.now(TAIPEI_TZ)
-    force_run = os.environ.get("FORCE_RUN_REPORT", "").strip().lower() in ("1", "true", "yes", "y")
+    force_run = env_flag("FORCE_RUN_REPORT")
     target_date = resolve_report_target(now_tw, force_run)
     expected_date = target_date.strftime("%Y-%m-%d")
     target_dt = datetime.combine(target_date, WEEKLY_REPORT_START_TIME, tzinfo=TAIPEI_TZ)
@@ -3974,6 +3744,8 @@ def main():
         f"[{now_tw.strftime('%Y-%m-%d %H:%M')}] 週報目標交易日={expected_date}，"
         f"開始每週趨勢分析，共 {len(cfg['watchlist'])} 檔"
     )
+    if os.environ.get("REPORT_TEST_DRIVE_FOLDER_ID", "").strip():
+        print("  驗收發布模式：固定 PDF 與日期備份將上傳至測試資料夾，不使用正式固定 file_id")
     if force_run:
         print("  force_run=true，忽略同週既有檔案檢查，強制重新產生並更新 PDF")
     backup_pdf_name = f"每週台股報告_{report_meta['date_key']}.pdf"

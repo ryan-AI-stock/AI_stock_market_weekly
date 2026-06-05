@@ -16,6 +16,11 @@ on:
         options:
           - 'false'
           - 'true'
+      test_drive_folder_id:
+        description: '選填：驗收模式 Drive 資料夾 ID；固定 PDF 與日期備份只上傳至此資料夾'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   run-weekly-signal:
@@ -46,6 +51,7 @@ jobs:
           WEEKLY_REPORT_DRIVE_FOLDER_ID: ${{ secrets.WEEKLY_REPORT_DRIVE_FOLDER_ID }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID || vars.GOOGLE_DRIVE_FOLDER_ID }}
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
+          REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
         run: python stock_market_tracking_system.py --schedule-gate
 
       - name: Install Chromium
@@ -64,4 +70,5 @@ jobs:
           PUBLIC_REPORT_DRIVE_FOLDER_ID: ${{ vars.PUBLIC_REPORT_DRIVE_FOLDER_ID }}
           PUBLIC_REPORT_DRIVE_FILE_ID: ${{ vars.PUBLIC_REPORT_DRIVE_FILE_ID }}
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
+          REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
         run: python stock_market_tracking_system.py

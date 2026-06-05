@@ -7,6 +7,7 @@ from unittest.mock import patch
 from stock_market_tracking_system import (
     build_public_report_html,
     build_trade_plan,
+    get_drive_target_folder_id,
     run_schedule_gate,
     upload_public_report_file,
     upload_report_file_to_drive,
@@ -56,6 +57,13 @@ class PublicReportContractTests(unittest.TestCase):
         )
 
         self.assertEqual(html.count("class='page'"), 4)
+        self.assertIn("@media screen", html)
+        self.assertIn("max-width:900px", html)
+        self.assertEqual(html.count("class='note hero-note'"), 1)
+        self.assertNotIn("class='summary'", html)
+        self.assertNotIn("class='status'>趨勢條件仍成立</div><div class='note'", html)
+        self.assertIn("<b>趨勢條件仍成立。</b>觀察關鍵均線與量能。｜週報偏向", html)
+        self.assertIn("週報偏向中大型權值股與中長線條件觀察", html)
         for text in (
             "每週台股報告",
             "權值股總覽",
@@ -68,7 +76,36 @@ class PublicReportContractTests(unittest.TestCase):
             self.assertIn(text, html)
 
 
+class SignalEvaluatorContractTests(unittest.TestCase):
+    def test_legacy_unweighted_evaluate_is_removed(self):
+        source_path = Path(__file__).resolve().parents[1] / "stock_market_tracking_system.py"
+        source = source_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("def evaluate(df:", source)
+        self.assertIn("def evaluate_weighted(", source)
+        self.assertIn("r    = evaluate_weighted(df, scfg, inst, macro, inst_week)", source)
+
+
 class DrivePublishContractTests(unittest.TestCase):
+    def test_acceptance_folder_overrides_backup_production_folder(self):
+        cfg = {
+            "drive_report": {
+                "enabled": True,
+                "folder_id": "production-backup-folder",
+                "folder_path": [],
+            }
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "REPORT_TEST_DRIVE_FOLDER_ID": TEST_DRIVE_FOLDER_ID,
+                "WEEKLY_REPORT_DRIVE_FOLDER_ID": "production-backup-folder",
+            },
+        ):
+            folder_id = get_drive_target_folder_id(object(), cfg, {}, create=False)
+
+        self.assertEqual(folder_id, TEST_DRIVE_FOLDER_ID)
+
     def test_public_pdf_upload_uses_test_folder_and_fixed_file_semantics(self):
         cfg = {
             "public_report": {
@@ -99,6 +136,40 @@ class DrivePublishContractTests(unittest.TestCase):
             file_name="每週台股報告.pdf",
             make_public=True,
             file_id="test-fixed-file-id",
+        )
+
+    def test_acceptance_folder_ignores_production_fixed_file_id(self):
+        cfg = {
+            "public_report": {
+                "enabled": True,
+                "folder_id": "production-folder",
+                "fixed_file_id": "production-fixed-file-id",
+                "fixed_file_name": "每週台股報告.pdf",
+                "make_public": True,
+            }
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "REPORT_TEST_DRIVE_FOLDER_ID": TEST_DRIVE_FOLDER_ID,
+                "PUBLIC_REPORT_DRIVE_FOLDER_ID": "production-public-folder",
+                "PUBLIC_REPORT_DRIVE_FILE_ID": "production-fixed-file-id",
+            },
+        ):
+            with patch(
+                "stock_market_tracking_system.upload_file_to_drive",
+                return_value={"webViewLink": "https://example.test/acceptance"},
+            ) as upload:
+                link = upload_public_report_file(Path("dummy.pdf"), cfg)
+
+        self.assertEqual(link, "https://example.test/acceptance")
+        upload.assert_called_once_with(
+            Path("dummy.pdf"),
+            TEST_DRIVE_FOLDER_ID,
+            "application/pdf",
+            file_name="每週台股報告.pdf",
+            make_public=True,
+            file_id=None,
         )
 
     def test_backup_pdf_upload_uses_resolved_folder_and_report_name(self):
@@ -190,6 +261,8 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.count("if: steps.schedule-gate.outputs.should_run == 'true'"),
             2,
         )
+        self.assertIn("test_drive_folder_id:", workflow)
+        self.assertEqual(workflow.count("REPORT_TEST_DRIVE_FOLDER_ID:"), 2)
 
 
 if __name__ == "__main__":
