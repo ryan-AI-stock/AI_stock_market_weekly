@@ -244,6 +244,24 @@ class ScheduleGateContractTests(unittest.TestCase):
         self.assertIn(("target_date", "2026-06-05"), writes)
         self.assertIn(("should_run", "true"), writes)
 
+    def test_schedule_gate_stops_without_failure_when_calendar_is_temporarily_unavailable(self):
+        writes = []
+        with (
+            patch("stock_market_tracking_system.load_config", return_value={}),
+            patch(
+                "stock_market_tracking_system.resolve_report_target",
+                side_effect=RuntimeError("TWSE calendar unavailable"),
+            ),
+            patch(
+                "stock_market_tracking_system._write_github_output",
+                side_effect=lambda name, value: writes.append((name, value)),
+            ),
+        ):
+            run_schedule_gate()
+
+        self.assertIn(("target_date", ""), writes)
+        self.assertIn(("should_run", "false"), writes)
+
 
 class WorkflowContractTests(unittest.TestCase):
     def test_workflow_keeps_hourly_schedule_and_schedule_gate(self):

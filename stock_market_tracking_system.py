@@ -2828,7 +2828,16 @@ def run_schedule_gate() -> None:
     cfg = load_config()
     now_tw = datetime.now(TAIPEI_TZ)
     force_run = env_flag("FORCE_RUN_REPORT")
-    target_date = resolve_report_target(now_tw, force_run)
+    try:
+        target_date = resolve_report_target(now_tw, force_run)
+    except Exception as exc:
+        _write_github_output("target_date", "")
+        _write_github_output("should_run", "false")
+        print(
+            "⚠️  無法確認本週台股最後交易日，排程閘門本次先停止，"
+            f"等待下次每小時重試：{exc}"
+        )
+        return
     backup_pdf_name = f"每週台股報告_{target_date.strftime('%Y%m%d')}.pdf"
     should_run = force_run or not drive_file_exists(backup_pdf_name, cfg)
     _write_github_output("target_date", target_date.strftime("%Y-%m-%d"))
