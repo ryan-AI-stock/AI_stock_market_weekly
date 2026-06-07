@@ -1,11 +1,13 @@
 import unittest
 from datetime import date, datetime
+from unittest.mock import patch
 
 from stock_market_tracking_system import (
     TAIPEI_TZ,
     last_twse_trading_day_of_week,
     latest_twse_trading_day,
     parse_twse_closed_dates,
+    resolve_report_target,
     resolve_weekly_report_target,
     validate_complete_report_results,
 )
@@ -96,6 +98,15 @@ class WeeklyTradingDateTests(unittest.TestCase):
         now = datetime(2026, 6, 19, 16, 0, tzinfo=TAIPEI_TZ)
 
         self.assertEqual(latest_twse_trading_day(now, closed), date(2026, 6, 18))
+
+    def test_force_run_falls_back_to_latest_weekday_when_calendar_is_temporarily_unavailable(self):
+        now = datetime(2026, 6, 6, 10, 0, tzinfo=TAIPEI_TZ)
+
+        with patch(
+            "weekly_data_sources.fetch_twse_closed_dates",
+            side_effect=RuntimeError("TWSE calendar unavailable"),
+        ):
+            self.assertEqual(resolve_report_target(now, force_run=True), date(2026, 6, 5))
 
 
 if __name__ == "__main__":

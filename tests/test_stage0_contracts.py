@@ -244,6 +244,27 @@ class ScheduleGateContractTests(unittest.TestCase):
         self.assertIn(("target_date", "2026-06-05"), writes)
         self.assertIn(("should_run", "true"), writes)
 
+    def test_schedule_gate_force_run_bypasses_existing_backup_check(self):
+        writes = []
+        with (
+            patch.dict(os.environ, {"FORCE_RUN_REPORT": "true"}, clear=False),
+            patch("stock_market_tracking_system.load_config", return_value={}),
+            patch(
+                "stock_market_tracking_system.resolve_report_target",
+                return_value=date(2026, 6, 5),
+            ),
+            patch("stock_market_tracking_system.drive_file_exists") as exists,
+            patch(
+                "stock_market_tracking_system._write_github_output",
+                side_effect=lambda name, value: writes.append((name, value)),
+            ),
+        ):
+            run_schedule_gate()
+
+        self.assertIn(("target_date", "2026-06-05"), writes)
+        self.assertIn(("should_run", "true"), writes)
+        exists.assert_not_called()
+
     def test_schedule_gate_stops_without_failure_when_calendar_is_temporarily_unavailable(self):
         writes = []
         with (

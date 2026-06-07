@@ -462,6 +462,8 @@ def resolve_report_target(now: datetime, force_run: bool) -> date:
     try:
         closed_dates = fetch_twse_closed_dates(calendar_years)
     except Exception as exc:
+        if force_run:
+            return latest_twse_trading_day(dt, set())
         raise RuntimeError(
             f"無法取得證交所官方休市日曆，為避免選錯週報日，本次中止並等待下次重試：{exc}"
         ) from exc
