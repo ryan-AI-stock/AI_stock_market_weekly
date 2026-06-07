@@ -1,0 +1,13 @@
+{
+  "version": "test",
+  "timezone": "Asia/Taipei",
+  "market": "TWSE",
+  "profiles": {
+    "weekly": {
+      "period_type": "weekly",
+      "run_after": "15:00",
+      "run_on": "last_trading_day_of_week",
+      "retry_until_next_trading_day": true
+    }
+  }
+}

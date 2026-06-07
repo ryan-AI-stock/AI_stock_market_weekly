@@ -1,15 +1,18 @@
 import unittest
 from datetime import date, datetime
+from pathlib import Path
 from unittest.mock import patch
 
 from stock_market_tracking_system import (
     TAIPEI_TZ,
     last_twse_trading_day_of_week,
     latest_twse_trading_day,
+    load_schedule_rules,
     parse_twse_closed_dates,
     resolve_report_target,
     resolve_weekly_report_target,
     validate_complete_report_results,
+    weekly_report_start_time,
 )
 
 
@@ -77,6 +80,13 @@ class WeeklyTradingDateTests(unittest.TestCase):
 
         self.assertEqual(resolve_weekly_report_target(now, closed), date(2026, 6, 18))
 
+    def test_weekly_run_after_comes_from_schedule_rules(self):
+        rules = {"profiles": {"weekly": {"run_after": "16:00"}}}
+        now = datetime(2026, 6, 5, 15, 30, tzinfo=TAIPEI_TZ)
+
+        self.assertEqual(weekly_report_start_time(rules).hour, 16)
+        self.assertEqual(resolve_weekly_report_target(now, set(), run_after=weekly_report_start_time(rules)), date(2026, 5, 29))
+
     def test_before_current_week_final_day_keeps_previous_target(self):
         now = datetime(2026, 6, 18, 15, 0, tzinfo=TAIPEI_TZ)
 
@@ -107,6 +117,14 @@ class WeeklyTradingDateTests(unittest.TestCase):
             side_effect=RuntimeError("TWSE calendar unavailable"),
         ):
             self.assertEqual(resolve_report_target(now, force_run=True), date(2026, 6, 5))
+
+    def test_load_schedule_rules_reads_external_rules_file(self):
+        rules_path = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "schedule_rules_weekly.json"
+
+        self.assertEqual(
+            load_schedule_rules(str(rules_path))["profiles"]["weekly"]["run_after"],
+            "15:00",
+        )
 
 
 if __name__ == "__main__":

@@ -55,9 +55,11 @@ from weekly_data_sources import (
     is_twse_trading_day,
     last_twse_trading_day_of_week,
     latest_twse_trading_day,
+    load_schedule_rules,
     parse_twse_closed_dates,
     resolve_report_target,
     resolve_weekly_report_target,
+    weekly_report_start_time,
 )
 
 
@@ -2828,6 +2830,8 @@ def run_schedule_gate() -> None:
     cfg = load_config()
     now_tw = datetime.now(TAIPEI_TZ)
     force_run = env_flag("FORCE_RUN_REPORT")
+    if os.environ.get("SCHEDULE_RULES_PATH"):
+        print(f"排程規則來源：{os.environ['SCHEDULE_RULES_PATH']}")
     try:
         target_date = resolve_report_target(now_tw, force_run)
     except Exception as exc:

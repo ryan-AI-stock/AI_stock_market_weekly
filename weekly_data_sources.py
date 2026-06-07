@@ -1,5 +1,9 @@
 """Data source helpers for the weekly stock market report."""
 
+import json
+import os
+from pathlib import Path
+
 import requests
 import yfinance as yf
 import pandas as pd
@@ -7,6 +11,24 @@ from datetime import date, datetime, timedelta, timezone, time
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
 WEEKLY_REPORT_START_TIME = time(15, 0)
+
+
+def load_schedule_rules(path: str | None = None) -> dict:
+    rules_path = path or os.environ.get("SCHEDULE_RULES_PATH")
+    if not rules_path:
+        return {}
+    return json.loads(Path(rules_path).read_text(encoding="utf-8"))
+
+
+def weekly_report_start_time(schedule_rules: dict | None = None) -> time:
+    raw = (
+        (schedule_rules or {})
+        .get("profiles", {})
+        .get("weekly", {})
+        .get("run_after", "15:00")
+    )
+    hour, minute = str(raw).split(":", 1)
+    return time(int(hour), int(minute))
 
 
 def _parse_int(value) -> int:
@@ -438,15 +460,20 @@ def latest_twse_trading_day(now: datetime, closed_dates: set[date]) -> date:
     raise RuntimeError("無法找到最近台股交易日")
 
 
-def resolve_weekly_report_target(now: datetime, closed_dates: set[date]) -> date:
+def resolve_weekly_report_target(
+    now: datetime,
+    closed_dates: set[date],
+    run_after: time | None = None,
+) -> date:
     dt = now if now.tzinfo else now.replace(tzinfo=TAIPEI_TZ)
+    run_after = run_after or WEEKLY_REPORT_START_TIME
     monday = dt.date() - timedelta(days=dt.date().weekday())
     for week_offset in range(0, 54):
         week_day = monday - timedelta(days=7 * week_offset)
         target = last_twse_trading_day_of_week(week_day, closed_dates)
         if target is None:
             continue
-        due_at = datetime.combine(target, WEEKLY_REPORT_START_TIME, tzinfo=TAIPEI_TZ)
+        due_at = datetime.combine(target, run_after, tzinfo=TAIPEI_TZ)
         if dt >= due_at:
             return target
     raise RuntimeError("無法找到已到產出時間的台股週報交易日")
@@ -454,6 +481,8 @@ def resolve_weekly_report_target(now: datetime, closed_dates: set[date]) -> date
 
 def resolve_report_target(now: datetime, force_run: bool) -> date:
     dt = now if now.tzinfo else now.replace(tzinfo=TAIPEI_TZ)
+    schedule_rules = load_schedule_rules()
+    run_after = weekly_report_start_time(schedule_rules)
     monday = dt.date() - timedelta(days=dt.date().weekday())
     calendar_years = {
         (monday - timedelta(days=7)).year,
@@ -469,7 +498,7 @@ def resolve_report_target(now: datetime, force_run: bool) -> date:
         ) from exc
     if force_run:
         return latest_twse_trading_day(dt, closed_dates)
-    return resolve_weekly_report_target(dt, closed_dates)
+    return resolve_weekly_report_target(dt, closed_dates, run_after=run_after)
 
 
 def _expected_latest_price_date(now: datetime | None = None):

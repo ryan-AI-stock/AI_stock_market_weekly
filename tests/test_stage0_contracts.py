@@ -296,12 +296,15 @@ class WorkflowContractTests(unittest.TestCase):
             "run: python stock_market_tracking_system.py --schedule-gate",
             workflow,
         )
+        self.assertIn("repository: ryan-AI-stock/AI_stock_schedule_rules", workflow)
+        self.assertIn("path: AI_stock_schedule_rules", workflow)
         self.assertEqual(
             workflow.count("if: steps.schedule-gate.outputs.should_run == 'true'"),
             2,
         )
         self.assertIn("test_drive_folder_id:", workflow)
         self.assertEqual(workflow.count("REPORT_TEST_DRIVE_FOLDER_ID:"), 2)
+        self.assertEqual(workflow.count("SCHEDULE_RULES_PATH:"), 2)
 
 
 if __name__ == "__main__":

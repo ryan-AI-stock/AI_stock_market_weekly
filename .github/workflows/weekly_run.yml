@@ -2,9 +2,10 @@ name: Weekly Taiwan Stock Market Report
 
 on:
   schedule:
-    # Check hourly every day. The program uses the official TWSE holiday
-    # calendar to run only after the week's actual final trading day closes.
-    # It keeps retrying across days until both Drive PDFs are published.
+    # Wake hourly so a failed weekly report can keep retrying across days
+    # without a 23:00 cutoff. The runtime gate reads AI_stock_schedule_rules,
+    # starts only after the weekly profile's run_after on the week's actual
+    # final TWSE trading day, and stops once the Drive backup PDF exists.
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
@@ -33,6 +34,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Checkout schedule rules
+        uses: actions/checkout@v4
+        with:
+          repository: ryan-AI-stock/AI_stock_schedule_rules
+          path: AI_stock_schedule_rules
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -52,6 +59,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID || vars.GOOGLE_DRIVE_FOLDER_ID }}
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
+          SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
         run: python stock_market_tracking_system.py --schedule-gate
 
       - name: Install Chromium
@@ -71,4 +79,5 @@ jobs:
           PUBLIC_REPORT_DRIVE_FILE_ID: ${{ vars.PUBLIC_REPORT_DRIVE_FILE_ID }}
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
+          SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
         run: python stock_market_tracking_system.py
