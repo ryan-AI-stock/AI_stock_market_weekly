@@ -18,7 +18,7 @@ on:
           - 'false'
           - 'true'
       test_drive_folder_id:
-        description: '選填：驗收模式 Drive 資料夾 ID；固定 PDF 與日期備份只上傳至此資料夾'
+        description: '選填：驗收模式 Drive 資料夾 ID；免費固定 PDF 只上傳至此資料夾'
         required: false
         default: ''
         type: string

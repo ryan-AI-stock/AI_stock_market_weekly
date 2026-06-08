@@ -51,10 +51,10 @@ https://github.com/ryanhsu1983/AI_stock_market_weekly
 - Google Drive folder ID：`1HnfRzfdu5XeBF51zBKBLvhTNZ8Z-rSCS`
 - 若 Google Drive 已存在同名檔案或已設定固定 file_id，程式會更新同一個檔案，避免 LINE 官方回覆連結變動。
 
-自用備份版：
+自用備份版（legacy，暫停產生）：
 
 - 檔名格式：`每週台股報告_YYYYMMDD.pdf`
-- 上傳位置維持既有週報備份資料夾。
+- 相關程式碼保留供未來回復或人工查核，但目前正式流程不再產生或上傳此日期備份 PDF。
 
 Google Drive 根資料夾：
 
@@ -68,7 +68,7 @@ https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 
 程式會讀取證交所官方市場開休市日曆，動態找出每週實際最後一個台股交易日，不再固定假設週五一定開市。若週五為國定假日，會改在該週更早的最後交易日收盤後開始產製；若整週皆休市，該週不會新增週報。
 
-同一週防重複產出會以最後上傳的自用備份 PDF 檔名作為完整發布判斷。免費固定 PDF 與自用備份 PDF 都成功上傳後，後續每小時排程偵測到同週備份檔便會直接跳過。若資料或上傳尚未完整成功，排程不受日期或時間上限限制，會跨日持續每小時重試。手動執行可用 `force_run=true` 強制重新產生並更新最近交易日 PDF。
+同一週防重複產出改以免費觀眾固定 PDF 的 Google Drive `modifiedTime` 作為完整發布判斷。若固定 PDF 已在本週目標交易日 15:00 後更新，後續每小時排程會直接跳過；若資料或上傳尚未完整成功，排程不受日期或時間上限限制，會跨日持續每小時重試。手動執行可用 `force_run=true` 強制重新產生並更新最近交易日 PDF。
 
 ## GitHub Actions
 
@@ -77,7 +77,7 @@ https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 - 每天每小時檢查一次，不限制到週五或 23:00
 - 使用證交所官方休市日曆判斷本週最後交易日，該交易日 15:00 後才開始產製
 - 若週報尚未完整產出或 Google Drive 上傳失敗，跨日持續於下個整點自動重試
-- 若免費固定 PDF 與日期備份 PDF 已完整上傳，後續排程會在輕量閘門停止，不安裝 Chromium、不執行完整產報
+- 若免費固定 PDF 已於本週產報啟動時間後完成更新，後續排程會在輕量閘門停止，不安裝 Chromium、不執行完整產報
 - 保留 `workflow_dispatch` 手動執行，支援 `force_run`
 
 GitHub Actions 使用 UTC，因此 workflow 內為：
@@ -93,4 +93,4 @@ python -m py_compile stock_market_tracking_system.py
 python stock_market_tracking_system.py
 ```
 
-程式會產生 HTML 預覽、免費版 PDF 與自用備份 PDF。若沒有 Google OAuth 憑證，PDF 會保留在本機但不會上傳。
+程式會產生 HTML 預覽與免費版 PDF。自用日期備份 PDF 目前暫停產生；若沒有 Google OAuth 憑證，PDF 會保留在本機但不會上傳。

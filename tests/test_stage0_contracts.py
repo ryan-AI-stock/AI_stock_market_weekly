@@ -2,12 +2,13 @@ import os
 import unittest
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from stock_market_tracking_system import (
     build_public_report_html,
     build_trade_plan,
     get_drive_target_folder_id,
+    public_report_is_complete,
     run_schedule_gate,
     upload_public_report_file,
     upload_report_file_to_drive,
@@ -204,9 +205,35 @@ class DrivePublishContractTests(unittest.TestCase):
             file_name=report_path.name,
         )
 
+    def test_public_report_completion_uses_fixed_pdf_modified_time(self):
+        cfg = {"public_report": {"enabled": True, "fixed_file_id": "fixed-weekly-pdf"}}
+        service = Mock()
+        service.files.return_value.get.return_value.execute.return_value = {
+            "id": "fixed-weekly-pdf",
+            "name": "每週台股報告.pdf",
+            "modifiedTime": "2026-06-05T08:10:00Z",
+            "trashed": False,
+        }
+
+        with patch("stock_market_tracking_system.build_google_drive_service", return_value=(service, "test")):
+            self.assertTrue(public_report_is_complete(date(2026, 6, 5), cfg))
+
+    def test_public_report_completion_rejects_stale_fixed_pdf(self):
+        cfg = {"public_report": {"enabled": True, "fixed_file_id": "fixed-weekly-pdf"}}
+        service = Mock()
+        service.files.return_value.get.return_value.execute.return_value = {
+            "id": "fixed-weekly-pdf",
+            "name": "每週台股報告.pdf",
+            "modifiedTime": "2026-06-05T06:59:00Z",
+            "trashed": False,
+        }
+
+        with patch("stock_market_tracking_system.build_google_drive_service", return_value=(service, "test")):
+            self.assertFalse(public_report_is_complete(date(2026, 6, 5), cfg))
+
 
 class ScheduleGateContractTests(unittest.TestCase):
-    def test_schedule_gate_stops_when_backup_exists(self):
+    def test_schedule_gate_stops_when_public_report_is_current(self):
         writes = []
         with (
             patch("stock_market_tracking_system.load_config", return_value={}),
@@ -214,7 +241,7 @@ class ScheduleGateContractTests(unittest.TestCase):
                 "stock_market_tracking_system.resolve_report_target",
                 return_value=date(2026, 6, 5),
             ),
-            patch("stock_market_tracking_system.drive_file_exists", return_value=True),
+            patch("stock_market_tracking_system.public_report_is_complete", return_value=True),
             patch(
                 "stock_market_tracking_system._write_github_output",
                 side_effect=lambda name, value: writes.append((name, value)),
@@ -225,7 +252,7 @@ class ScheduleGateContractTests(unittest.TestCase):
         self.assertIn(("target_date", "2026-06-05"), writes)
         self.assertIn(("should_run", "false"), writes)
 
-    def test_schedule_gate_runs_when_backup_is_missing(self):
+    def test_schedule_gate_runs_when_public_report_is_not_current(self):
         writes = []
         with (
             patch("stock_market_tracking_system.load_config", return_value={}),
@@ -233,7 +260,7 @@ class ScheduleGateContractTests(unittest.TestCase):
                 "stock_market_tracking_system.resolve_report_target",
                 return_value=date(2026, 6, 5),
             ),
-            patch("stock_market_tracking_system.drive_file_exists", return_value=False),
+            patch("stock_market_tracking_system.public_report_is_complete", return_value=False),
             patch(
                 "stock_market_tracking_system._write_github_output",
                 side_effect=lambda name, value: writes.append((name, value)),
@@ -253,7 +280,7 @@ class ScheduleGateContractTests(unittest.TestCase):
                 "stock_market_tracking_system.resolve_report_target",
                 return_value=date(2026, 6, 5),
             ),
-            patch("stock_market_tracking_system.drive_file_exists") as exists,
+            patch("stock_market_tracking_system.public_report_is_complete") as complete,
             patch(
                 "stock_market_tracking_system._write_github_output",
                 side_effect=lambda name, value: writes.append((name, value)),
@@ -263,7 +290,7 @@ class ScheduleGateContractTests(unittest.TestCase):
 
         self.assertIn(("target_date", "2026-06-05"), writes)
         self.assertIn(("should_run", "true"), writes)
-        exists.assert_not_called()
+        complete.assert_not_called()
 
     def test_schedule_gate_stops_without_failure_when_calendar_is_temporarily_unavailable(self):
         writes = []

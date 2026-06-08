@@ -2683,6 +2683,81 @@ def drive_file_exists(file_name: str, cfg: dict) -> bool:
         print(f"⚠️  檢查 Google Drive 既有檔案失敗，繼續執行避免漏寄：{exc}")
     return False
 
+
+def _parse_drive_modified_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(TAIPEI_TZ)
+    except ValueError:
+        return None
+
+
+def weekly_report_due_at(target_date) -> datetime:
+    try:
+        run_after = weekly_report_start_time(load_schedule_rules())
+    except Exception:
+        run_after = WEEKLY_REPORT_START_TIME
+    return datetime.combine(target_date, run_after, tzinfo=TAIPEI_TZ)
+
+
+def public_report_is_complete(target_date, cfg: dict) -> bool:
+    public_cfg = cfg.get("public_report", {})
+    if not public_cfg.get("enabled", False):
+        return False
+
+    service, _auth_mode = build_google_drive_service()
+    if not service:
+        print("⚠️  無法檢查免費固定 PDF，繼續執行避免漏發")
+        return False
+
+    due_at = weekly_report_due_at(target_date)
+    fixed_name = public_cfg.get("fixed_file_name", "每週台股報告.pdf")
+
+    try:
+        file_id = resolve_public_report_file_id(public_cfg)
+        if file_id:
+            file_meta = service.files().get(
+                fileId=file_id,
+                fields="id,name,modifiedTime,trashed",
+                supportsAllDrives=True,
+            ).execute()
+            modified_at = _parse_drive_modified_time(file_meta.get("modifiedTime"))
+            if not file_meta.get("trashed") and modified_at and modified_at >= due_at:
+                print(
+                    f"免費固定 PDF 已於 {modified_at.strftime('%Y-%m-%d %H:%M')} 更新，"
+                    "視為本週完整發布完成，跳過本次每小時重試"
+                )
+                return True
+            return False
+
+        folder_id = resolve_public_report_folder_id(public_cfg)
+        if not folder_id:
+            return False
+        query = (
+            f"'{folder_id}' in parents and "
+            f"name = '{drive_name_query(fixed_name)}' and "
+            "trashed = false"
+        )
+        existing = service.files().list(
+            q=query,
+            fields="files(id,name,modifiedTime)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ).execute().get("files", [])
+        for file_meta in existing:
+            modified_at = _parse_drive_modified_time(file_meta.get("modifiedTime"))
+            if modified_at and modified_at >= due_at:
+                print(
+                    f"免費固定 PDF 已於 {modified_at.strftime('%Y-%m-%d %H:%M')} 更新，"
+                    "視為本週完整發布完成，跳過本次每小時重試"
+                )
+                return True
+    except Exception as exc:
+        print(f"⚠️  檢查免費固定 PDF 失敗，繼續執行避免漏發：{exc}")
+    return False
+
+
 def upload_report_image_to_drive(image_path: Path, today: str, cfg: dict) -> str | None:
     drive_cfg = cfg.get("drive_report", {})
     if not drive_cfg.get("enabled", False):
@@ -2842,14 +2917,13 @@ def run_schedule_gate() -> None:
             f"等待下次每小時重試：{exc}"
         )
         return
-    backup_pdf_name = f"每週台股報告_{target_date.strftime('%Y%m%d')}.pdf"
-    should_run = force_run or not drive_file_exists(backup_pdf_name, cfg)
+    should_run = force_run or not public_report_is_complete(target_date, cfg)
     _write_github_output("target_date", target_date.strftime("%Y-%m-%d"))
     _write_github_output("should_run", "true" if should_run else "false")
     if should_run:
-        print(f"週報尚未完整發布：{backup_pdf_name}，執行完整產報流程")
+        print("週報免費固定 PDF 尚未完成本週更新，執行完整產報流程")
     else:
-        print(f"週報已完整發布：{backup_pdf_name}，本次排程在閘門停止")
+        print("週報免費固定 PDF 已完成本週更新，本次排程在閘門停止")
 
 
 # ── 主流程 ───────────────────────────────────────────────────
@@ -2869,6 +2943,7 @@ def prepare_weekly_run(cfg: dict, now_tw: datetime | None = None, force_run: boo
         "target_dt": target_dt,
         "report_meta": report_meta,
         "today": report_meta["date"],
+        # Legacy dated backup PDF name retained for future rollback/reference.
         "backup_pdf_name": f"每週台股報告_{report_meta['date_key']}.pdf",
     }
 
@@ -2936,7 +3011,6 @@ def analyze_weekly_watchlist(cfg: dict, run: dict, market_inputs: dict) -> list:
 def publish_weekly_report_outputs(cfg: dict, run: dict, results: list, market_inputs: dict, event_items: list) -> dict:
     today = run["today"]
     report_meta = run["report_meta"]
-    backup_pdf_name = run["backup_pdf_name"]
     macro = market_inputs["macro"]
     news_items = market_inputs["news_items"]
 
@@ -2965,33 +3039,11 @@ def publish_weekly_report_outputs(cfg: dict, run: dict, results: list, market_in
             "Email 已關閉，但免費觀眾 Google Drive PDF 上傳失敗，發布流程中止",
         )
 
-    public_preview_path = Path(__file__).parent / "public_report" / "public_report_preview.html"
-    backup_pdf_path = render_report_pdf(public_preview_path, backup_pdf_name, prefer_css_page_size=True)
     backup_link = None
-    if backup_pdf_path:
-        print(f"已產生自用備份 PDF：{backup_pdf_path}")
-        backup_link = upload_report_file_to_drive(
-            backup_pdf_path,
-            today,
-            cfg,
-            file_name=backup_pdf_name,
-            mime_type="application/pdf",
-        )
-        if backup_link:
-            print(f"已上傳或更新自用備份 PDF：{backup_link}")
-        elif email_disabled(cfg) and cfg.get("drive_report", {}).get("enabled", False):
-            handle_drive_publish_failure(
-                cfg,
-                "Email 已關閉，但自用備份 Google Drive PDF 上傳失敗，發布流程中止",
-            )
-    elif email_disabled(cfg) and cfg.get("drive_report", {}).get("enabled", False):
-        handle_drive_publish_failure(
-            cfg,
-            "Email 已關閉，但自用備份 PDF 產生失敗，發布流程中止",
-        )
+    print("自用日期備份 PDF 目前已暫停產生；legacy 備份上傳程式保留但本流程不呼叫")
 
-    if public_link and backup_link:
-        print("✅ 免費固定 PDF 與自用備份 PDF 已完整上傳 Google Drive；後續每小時排程將自動跳過")
+    if public_link:
+        print("✅ 免費固定 PDF 已完整上傳 Google Drive；後續每小時排程將自動跳過")
 
     return {"public_link": public_link, "backup_link": backup_link}
 
@@ -3004,10 +3056,10 @@ def main():
         f"開始每週趨勢分析，共 {len(cfg['watchlist'])} 檔"
     )
     if in_acceptance_drive_mode():
-        print("  驗收發布模式：固定 PDF 與日期備份將上傳至測試資料夾，不使用正式固定 file_id")
+        print("  驗收發布模式：免費固定 PDF 將上傳至測試資料夾，不使用正式固定 file_id")
     if run["force_run"]:
         print("  force_run=true，忽略同週既有檔案檢查，強制重新產生並更新 PDF")
-    if not run["force_run"] and drive_file_exists(run["backup_pdf_name"], cfg):
+    if not run["force_run"] and public_report_is_complete(run["target_date"], cfg):
         return
 
     market_inputs = fetch_weekly_market_inputs(cfg, run["target_dt"])
@@ -3021,7 +3073,7 @@ def main():
     event_items = fetch_auto_market_events(cfg, run["today"])
     print(f"  自動重大事件掃描：取得 {len(event_items)} 則高關聯事件")
 
-    if not run["force_run"] and drive_file_exists(run["backup_pdf_name"], cfg):
+    if not run["force_run"] and public_report_is_complete(run["target_date"], cfg):
         return
 
     publish_weekly_report_outputs(cfg, run, results, market_inputs, event_items)

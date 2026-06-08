@@ -69,7 +69,7 @@ class WeeklyOrchestrationTests(unittest.TestCase):
         self.assertEqual(results[0][2]["stock_note"], "觀察")
         evaluate.assert_called_once()
 
-    def test_publish_weekly_report_outputs_returns_public_and_backup_links(self):
+    def test_publish_weekly_report_outputs_returns_public_link_without_dated_backup(self):
         cfg = {"email": {"enabled": False}, "public_report": {"enabled": True}, "drive_report": {"enabled": True}}
         run = {
             "today": "2026-06-05",
@@ -84,15 +84,17 @@ class WeeklyOrchestrationTests(unittest.TestCase):
             patch("stock_market_tracking_system.build_public_report_html", return_value="<html>public</html>"),
             patch("stock_market_tracking_system.save_public_report_file", return_value=Path("public.pdf")),
             patch("stock_market_tracking_system.upload_public_report_file", return_value="https://drive/public"),
-            patch("stock_market_tracking_system.render_report_pdf", return_value=Path("backup.pdf")),
-            patch("stock_market_tracking_system.upload_report_file_to_drive", return_value="https://drive/backup"),
+            patch("stock_market_tracking_system.render_report_pdf") as render_pdf,
+            patch("stock_market_tracking_system.upload_report_file_to_drive") as upload_backup,
         ):
             links = publish_weekly_report_outputs(cfg, run, [], market_inputs, [])
 
         self.assertEqual(
             links,
-            {"public_link": "https://drive/public", "backup_link": "https://drive/backup"},
+            {"public_link": "https://drive/public", "backup_link": None},
         )
+        render_pdf.assert_not_called()
+        upload_backup.assert_not_called()
 
 
 if __name__ == "__main__":
