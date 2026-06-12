@@ -688,6 +688,45 @@ def format_ratio_value(value: float) -> str:
     return "0.00%"
 
 
+def institutional_price_confirmation(df: pd.DataFrame, close: float, ma_s: float, ma_m: float,
+                                     hist: float, hist_p: float) -> dict:
+    """Confirm chip-flow risk with price action before giving it full weight."""
+    closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    drawdown10_pct = None
+    if len(closes) >= 10:
+        high10 = float(closes.tail(10).max())
+        if high10:
+            drawdown10_pct = (close / high10 - 1) * 100
+
+    below_short_mid = close < ma_s and close < ma_m
+    below_mid_with_weak_macd = close < ma_m and (hist < 0 or hist < hist_p)
+    confirmed = (
+        (drawdown10_pct is not None and drawdown10_pct <= -8.0)
+        or below_short_mid
+        or below_mid_with_weak_macd
+    )
+
+    reasons = []
+    if drawdown10_pct is not None and drawdown10_pct <= -8.0:
+        reasons.append(f"近10日高點回落{abs(drawdown10_pct):.1f}%")
+    if below_short_mid:
+        reasons.append("收盤跌破短中期均線")
+    elif below_mid_with_weak_macd:
+        reasons.append("跌破中期均線且MACD轉弱")
+
+    if confirmed:
+        note = f"價格確認:{'、'.join(reasons)}"
+    else:
+        dd_text = f"{drawdown10_pct:+.1f}%" if drawdown10_pct is not None else "資料不足"
+        note = f"價格尚未確認轉弱:近10日回落{dd_text}，法人賣超先降權處理"
+
+    return {
+        "confirmed": confirmed,
+        "drawdown10_pct": drawdown10_pct,
+        "note": note,
+    }
+
+
 # ── 評估訊號 ────────────────────────────────────────────────
 def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
                       macro: dict | None = None, inst_week: dict | None = None) -> dict:
@@ -724,6 +763,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
     obv = float(latest["OBV"])
     obv_ma = float(latest["OBV_MA"])
     obv_prev = float(prev["OBV"])
+    inst_price_context = institutional_price_confirmation(df, close, ma_s, ma_m, hist, hist_p)
 
     items = []
     buy_score = 0.0
@@ -905,13 +945,29 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
                 add_item("三大法人", "法人明顯買超 ✅", UP_COLOR, inst_note, WEIGHTS["institutional"], 0)
             elif net_ratio <= -5 and sell_breadth >= 2:
                 inst_signal = "strong_sell"
-                add_item("三大法人", "法人明顯賣超 ⚠️", DOWN_COLOR, inst_note, 0, WEIGHTS["institutional"])
+                sell_weight = WEIGHTS["institutional"] if inst_price_context["confirmed"] else WEIGHTS["institutional"] * 0.5
+                add_item(
+                    "三大法人",
+                    "法人明顯賣超 ⚠️" if inst_price_context["confirmed"] else "法人明顯賣超，價格未確認",
+                    DOWN_COLOR,
+                    f"{inst_note}｜{inst_price_context['note']}",
+                    0,
+                    sell_weight,
+                )
             elif net_ratio > 1 or buy_breadth >= 2:
                 inst_signal = "buy"
                 add_item("三大法人", "法人偏買", UP_COLOR, inst_note, WEIGHTS["institutional"] * 0.5, 0)
             elif net_ratio < -1 or sell_breadth >= 2:
                 inst_signal = "sell"
-                add_item("三大法人", "法人偏賣", DOWN_COLOR, inst_note, 0, WEIGHTS["institutional"] * 0.5)
+                sell_weight = WEIGHTS["institutional"] * (0.5 if inst_price_context["confirmed"] else 0.25)
+                add_item(
+                    "三大法人",
+                    "法人偏賣" if inst_price_context["confirmed"] else "法人偏賣，價格未確認",
+                    DOWN_COLOR,
+                    f"{inst_note}｜{inst_price_context['note']}",
+                    0,
+                    sell_weight,
+                )
             else:
                 add_item("三大法人", "籌碼中性", NEUTRAL_COLOR, inst_note)
         else:
@@ -1042,7 +1098,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
     if inst_signal in ("strong_buy", "buy"):
         positive_evidence.append("法人偏買")
     elif inst_signal in ("strong_sell", "sell"):
-        risk_evidence.append("法人偏賣")
+        risk_evidence.append("法人偏賣且價格轉弱" if inst_price_context["confirmed"] else "法人偏賣但價格尚未確認轉弱")
     if kd_signal in ("golden_cross", "turning_up"):
         positive_evidence.append("KD轉強")
     elif kd_signal in ("death_cross", "turning_down"):
