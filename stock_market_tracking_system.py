@@ -1,7 +1,7 @@
 """
 每週台股趨勢訊號系統 v1
 ===================
-Repository : github.com/ryanhsu1983/AI_stock_market_weekly
+Repository : github.com/ryan-AI-stock/AI_stock_market_weekly
 從每日版模型改造為週報：追蹤台股加權與中大型權值股的本週變化、趨勢判斷與下週觀察。
 """
 

@@ -325,6 +325,8 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("repository: ryan-AI-stock/AI_stock_schedule_rules", workflow)
         self.assertIn("path: AI_stock_schedule_rules", workflow)
+        self.assertIn("fixed public Drive PDF is current", workflow)
+        self.assertNotIn("Drive backup PDF exists", workflow)
         self.assertEqual(
             workflow.count("if: steps.schedule-gate.outputs.should_run == 'true'"),
             2,

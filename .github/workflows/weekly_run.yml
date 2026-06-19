@@ -5,7 +5,7 @@ on:
     # Wake hourly so a failed weekly report can keep retrying across days
     # without a 23:00 cutoff. The runtime gate reads AI_stock_schedule_rules,
     # starts only after the weekly profile's run_after on the week's actual
-    # final TWSE trading day, and stops once the Drive backup PDF exists.
+    # final TWSE trading day, and stops once the fixed public Drive PDF is current.
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:

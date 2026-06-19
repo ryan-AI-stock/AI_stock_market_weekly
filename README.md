@@ -1,14 +1,14 @@
 # AI_stock_market_weekly
 
-台股每週訊號追蹤專案。程式會在每週五台灣時間收盤後抓取資料，追蹤台灣加權指數與中大型權值股，產出「每週台股趨勢報告」PDF。
+台股每週訊號追蹤專案。程式會在每週最後一個台股交易日收盤後抓取資料，追蹤台灣加權指數與中大型權值股，產出「每週台股趨勢報告」PDF。
 
 正式工作目錄：
 
-`C:\Users\zergv\Documents\GitHub\AI_stock_market_weekly`
+`C:\Users\zergv\Documents\Codex\2026-05-23\ai-stock-market-weekly-https-docs`
 
 GitHub repo：
 
-https://github.com/ryanhsu1983/AI_stock_market_weekly
+https://github.com/ryan-AI-stock/AI_stock_market_weekly
 
 ## 追蹤標的
 
@@ -25,7 +25,7 @@ https://github.com/ryanhsu1983/AI_stock_market_weekly
 
 - `stock_market_tracking_system.py`：主程式，負責抓資料、計算週報模型與週報指標、產生 PDF 報告並上傳 Google Drive。
 - `config.json`：追蹤標的、指標門檻、重大事件、Google Drive 上傳與 PDF 設定。
-- `.github/workflows/weekly_run.yml`：GitHub Actions 每週五自動執行設定。
+- `.github/workflows/weekly_run.yml`：GitHub Actions 每小時喚醒，透過排程閘門判斷是否需產製週報。
 - `email_preview.html`：本機執行後產生的預覽檔，不應提交到 Git。
 
 ## 週報模型
@@ -39,7 +39,7 @@ https://github.com/ryanhsu1983/AI_stock_market_weekly
 - 收盤價相對 10/20/60 日均線位置
 - 本週趨勢總結
 - 下週觀察重點
-- 強勢續抱、過熱不追、轉弱觀察、修正等待、盤整區間等週報判讀
+- 趨勢條件仍成立、追價風險偏高、轉弱觀察、修正等待、盤整區間等週報判讀
 
 ## PDF 輸出
 
