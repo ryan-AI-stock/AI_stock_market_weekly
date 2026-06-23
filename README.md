@@ -68,7 +68,7 @@ https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 
 程式會讀取證交所官方市場開休市日曆，動態找出每週實際最後一個台股交易日，不再固定假設週五一定開市。若週五為國定假日，會改在該週更早的最後交易日收盤後開始產製；若整週皆休市，該週不會新增週報。
 
-同一週防重複產出改以免費觀眾固定 PDF 的 Google Drive `modifiedTime` 作為完整發布判斷。若固定 PDF 已在本週目標交易日 15:00 後更新，後續每小時排程會直接跳過；若資料或上傳尚未完整成功，排程不受日期或時間上限限制，會跨日持續每小時重試。手動執行可用 `force_run=true` 強制重新產生並更新最近交易日 PDF。
+同一週防重複產出改以免費觀眾固定 PDF 的 Google Drive `modifiedTime` 作為完整發布判斷。若固定 PDF 已在本週目標交易日 15:00 後更新，後續每小時排程會直接跳過；若資料或上傳尚未完整成功，排程不受日期或時間上限限制，會跨日持續每小時重試。手動 `workflow_dispatch` 預設視為補跑，會使用最新已到產報時間的完整週報交易日，略過固定 PDF 已完成 gate，重新產生並覆蓋固定 PDF；執行後會寫出 `public_report/weekly_run_manifest.json`，記錄 `requested_date/week`、`actual_report_date/week`、`fallback_reason` 與 `manual_rerun=true`。
 
 ## GitHub Actions
 
@@ -78,7 +78,7 @@ https://drive.google.com/drive/u/0/folders/1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T
 - 使用證交所官方休市日曆判斷本週最後交易日，該交易日 15:00 後才開始產製
 - 若週報尚未完整產出或 Google Drive 上傳失敗，跨日持續於下個整點自動重試
 - 若免費固定 PDF 已於本週產報啟動時間後完成更新，後續排程會在輕量閘門停止，不安裝 Chromium、不執行完整產報
-- 保留 `workflow_dispatch` 手動執行，支援 `force_run`
+- 保留 `workflow_dispatch` 手動執行；手動補跑預設覆蓋固定 PDF，`force_run` 仍保留為明確強制補跑開關
 
 GitHub Actions 使用 UTC，因此 workflow 內為：
 

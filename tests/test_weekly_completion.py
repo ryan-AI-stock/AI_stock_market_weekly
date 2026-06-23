@@ -97,6 +97,12 @@ class WeeklyTradingDateTests(unittest.TestCase):
 
         self.assertEqual(resolve_weekly_report_target(now, set()), date(2026, 6, 5))
 
+    def test_force_run_uses_latest_complete_week_not_action_day(self):
+        now = datetime(2026, 6, 23, 16, 0, tzinfo=TAIPEI_TZ)
+
+        with patch("weekly_data_sources.fetch_twse_closed_dates", return_value=set()):
+            self.assertEqual(resolve_report_target(now, force_run=True), date(2026, 6, 19))
+
     def test_full_week_holiday_keeps_previous_target(self):
         closed = {date(2026, 2, day) for day in range(16, 21)}
         now = datetime(2026, 2, 20, 18, 0, tzinfo=TAIPEI_TZ)

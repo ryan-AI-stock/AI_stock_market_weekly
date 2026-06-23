@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: '忽略同週已產出檢查，強制重新產生並更新 PDF'
+        description: '手動補跑預設會忽略同週已產出檢查，重新產生並覆蓋固定 PDF'
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options:
           - 'false'
@@ -58,6 +58,7 @@ jobs:
           WEEKLY_REPORT_DRIVE_FOLDER_ID: ${{ secrets.WEEKLY_REPORT_DRIVE_FOLDER_ID }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID || vars.GOOGLE_DRIVE_FOLDER_ID }}
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
+          MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
           SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
         run: python stock_market_tracking_system.py --schedule-gate
@@ -78,6 +79,7 @@ jobs:
           PUBLIC_REPORT_DRIVE_FOLDER_ID: ${{ vars.PUBLIC_REPORT_DRIVE_FOLDER_ID }}
           PUBLIC_REPORT_DRIVE_FILE_ID: ${{ vars.PUBLIC_REPORT_DRIVE_FILE_ID }}
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
+          MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
           SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
         run: python stock_market_tracking_system.py

@@ -6,6 +6,7 @@ Repository : github.com/ryan-AI-stock/AI_stock_market_weekly
 """
 
 import html as html_lib
+import json
 import os, re, sys, requests
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
@@ -2957,27 +2958,82 @@ def _write_github_output(name: str, value: str) -> None:
     write_github_output(name, value)
 
 
+def manual_rerun_requested() -> bool:
+    return env_flag("MANUAL_RERUN") or os.environ.get("GITHUB_EVENT_NAME", "").strip() == "workflow_dispatch"
+
+
+def _rerun_bypasses_completion_gate(force_run: bool, manual_rerun: bool) -> bool:
+    return bool(force_run or manual_rerun)
+
+
+def _fallback_reason(force_run: bool, manual_rerun: bool, requested_date, actual_report_date) -> str:
+    if manual_rerun:
+        if requested_date != actual_report_date:
+            return "manual_rerun_latest_complete_week"
+        return "manual_rerun_bypasses_fixed_pdf_completion_gate"
+    if force_run:
+        return "force_run_bypasses_fixed_pdf_completion_gate"
+    return ""
+
+
+def write_weekly_run_manifest(run: dict, links: dict | None = None) -> Path:
+    out_dir = Path(__file__).parent / "public_report"
+    out_dir.mkdir(exist_ok=True)
+    manifest = {
+        "manual_rerun": bool(run.get("manual_rerun")),
+        "force_run": bool(run.get("force_run")),
+        "requested_date": run["requested_meta"]["date"],
+        "requested_week": run["requested_meta"]["week_key"],
+        "actual_report_date": run["report_meta"]["date"],
+        "actual_report_week": run["report_meta"]["week_key"],
+        "fallback_reason": run.get("fallback_reason", ""),
+        "target_date": run["expected_date"],
+        "generated_at": run["now_tw"].isoformat(),
+        "public_link": (links or {}).get("public_link"),
+        "backup_link": (links or {}).get("backup_link"),
+    }
+    path = out_dir / "weekly_run_manifest.json"
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"已寫入週報執行 manifest：{path}")
+    return path
+
+
 def run_schedule_gate() -> None:
     cfg = load_config()
     now_tw = datetime.now(TAIPEI_TZ)
     force_run = env_flag("FORCE_RUN_REPORT")
+    manual_rerun = manual_rerun_requested()
+    bypass_completion_gate = _rerun_bypasses_completion_gate(force_run, manual_rerun)
     if os.environ.get("SCHEDULE_RULES_PATH"):
         print(f"排程規則來源：{os.environ['SCHEDULE_RULES_PATH']}")
     try:
-        target_date = resolve_report_target(now_tw, force_run)
+        target_date = resolve_report_target(now_tw, bypass_completion_gate)
     except Exception as exc:
         _write_github_output("target_date", "")
         _write_github_output("should_run", "false")
+        _write_github_output("manual_rerun", "true" if manual_rerun else "false")
         print(
             "⚠️  無法確認本週台股最後交易日，排程閘門本次先停止，"
             f"等待下次每小時重試：{exc}"
         )
         return
-    should_run = force_run or not public_report_is_complete(target_date, cfg)
+    should_run = bypass_completion_gate or not public_report_is_complete(target_date, cfg)
+    requested_meta = get_report_meta(now_tw)
+    actual_meta = get_report_meta(datetime.combine(target_date, WEEKLY_REPORT_START_TIME, tzinfo=TAIPEI_TZ))
+    fallback_reason = _fallback_reason(force_run, manual_rerun, now_tw.date(), target_date)
+    _write_github_output("requested_date", requested_meta["date"])
+    _write_github_output("requested_week", requested_meta["week_key"])
+    _write_github_output("actual_report_date", actual_meta["date"])
+    _write_github_output("actual_report_week", actual_meta["week_key"])
+    _write_github_output("fallback_reason", fallback_reason)
+    _write_github_output("manual_rerun", "true" if manual_rerun else "false")
     _write_github_output("target_date", target_date.strftime("%Y-%m-%d"))
     _write_github_output("should_run", "true" if should_run else "false")
     if should_run:
-        print("週報免費固定 PDF 尚未完成本週更新，執行完整產報流程")
+        if bypass_completion_gate:
+            print("手動補跑或 force_run 已啟用，略過免費固定 PDF 完成檢查，執行完整產報流程")
+        else:
+            print("週報免費固定 PDF 尚未完成本週更新，執行完整產報流程")
     else:
         print("週報免費固定 PDF 已完成本週更新，本次排程在閘門停止")
 
@@ -2986,14 +3042,21 @@ def run_schedule_gate() -> None:
 def prepare_weekly_run(cfg: dict, now_tw: datetime | None = None, force_run: bool | None = None) -> dict:
     now_tw = now_tw or datetime.now(TAIPEI_TZ)
     force_run = env_flag("FORCE_RUN_REPORT") if force_run is None else force_run
-    target_date = resolve_report_target(now_tw, force_run)
+    manual_rerun = manual_rerun_requested()
+    bypass_completion_gate = _rerun_bypasses_completion_gate(force_run, manual_rerun)
+    target_date = resolve_report_target(now_tw, bypass_completion_gate)
     expected_date = target_date.strftime("%Y-%m-%d")
     target_dt = datetime.combine(target_date, WEEKLY_REPORT_START_TIME, tzinfo=TAIPEI_TZ)
     report_meta = get_report_meta(target_dt)
+    requested_meta = get_report_meta(now_tw)
     return {
         "cfg": cfg,
         "now_tw": now_tw,
         "force_run": force_run,
+        "manual_rerun": manual_rerun,
+        "bypass_completion_gate": bypass_completion_gate,
+        "requested_meta": requested_meta,
+        "fallback_reason": _fallback_reason(force_run, manual_rerun, now_tw.date(), target_date),
         "target_date": target_date,
         "expected_date": expected_date,
         "target_dt": target_dt,
@@ -3115,7 +3178,13 @@ def main():
         print("  驗收發布模式：免費固定 PDF 將上傳至測試資料夾，不使用正式固定 file_id")
     if run["force_run"]:
         print("  force_run=true，忽略同週既有檔案檢查，強制重新產生並更新 PDF")
-    if not run["force_run"] and public_report_is_complete(run["target_date"], cfg):
+    if run["manual_rerun"]:
+        print(
+            "  manual_rerun=true，使用最新可完整產報週並覆蓋固定 PDF；"
+            f"requested={run['requested_meta']['date']} / actual={run['expected_date']} / "
+            f"fallback_reason={run['fallback_reason']}"
+        )
+    if not run["bypass_completion_gate"] and public_report_is_complete(run["target_date"], cfg):
         return
 
     market_inputs = fetch_weekly_market_inputs(cfg, run["target_dt"])
@@ -3129,10 +3198,11 @@ def main():
     event_items = fetch_auto_market_events(cfg, run["today"])
     print(f"  自動重大事件掃描：取得 {len(event_items)} 則高關聯事件")
 
-    if not run["force_run"] and public_report_is_complete(run["target_date"], cfg):
+    if not run["bypass_completion_gate"] and public_report_is_complete(run["target_date"], cfg):
         return
 
-    publish_weekly_report_outputs(cfg, run, results, market_inputs, event_items)
+    links = publish_weekly_report_outputs(cfg, run, results, market_inputs, event_items)
+    write_weekly_run_manifest(run, links)
 
 
 if __name__ == "__main__":

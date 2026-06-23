@@ -292,6 +292,32 @@ class ScheduleGateContractTests(unittest.TestCase):
         self.assertIn(("should_run", "true"), writes)
         complete.assert_not_called()
 
+    def test_schedule_gate_manual_rerun_bypasses_fixed_pdf_completion_gate(self):
+        writes = []
+        with (
+            patch.dict(os.environ, {"MANUAL_RERUN": "true", "FORCE_RUN_REPORT": "false"}, clear=False),
+            patch("stock_market_tracking_system.load_config", return_value={}),
+            patch(
+                "stock_market_tracking_system.resolve_report_target",
+                return_value=date(2026, 6, 19),
+            ) as resolve_target,
+            patch("stock_market_tracking_system.public_report_is_complete") as complete,
+            patch(
+                "stock_market_tracking_system._write_github_output",
+                side_effect=lambda name, value: writes.append((name, value)),
+            ),
+        ):
+            run_schedule_gate()
+
+        resolve_target.assert_called_once()
+        self.assertTrue(resolve_target.call_args.args[1])
+        complete.assert_not_called()
+        self.assertIn(("manual_rerun", "true"), writes)
+        self.assertIn(("actual_report_date", "2026-06-19"), writes)
+        self.assertIn(("fallback_reason", "manual_rerun_latest_complete_week"), writes)
+        self.assertIn(("target_date", "2026-06-19"), writes)
+        self.assertIn(("should_run", "true"), writes)
+
     def test_schedule_gate_stops_without_failure_when_calendar_is_temporarily_unavailable(self):
         writes = []
         with (
@@ -332,7 +358,10 @@ class WorkflowContractTests(unittest.TestCase):
             2,
         )
         self.assertIn("test_drive_folder_id:", workflow)
+        self.assertIn("default: 'true'", workflow)
+        self.assertIn("MANUAL_RERUN:", workflow)
         self.assertEqual(workflow.count("REPORT_TEST_DRIVE_FOLDER_ID:"), 2)
+        self.assertEqual(workflow.count("MANUAL_RERUN:"), 2)
         self.assertEqual(workflow.count("SCHEDULE_RULES_PATH:"), 2)
 
 
