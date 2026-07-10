@@ -55,8 +55,8 @@ jobs:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-          WEEKLY_REPORT_DRIVE_FOLDER_ID: ${{ secrets.WEEKLY_REPORT_DRIVE_FOLDER_ID }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID || vars.GOOGLE_DRIVE_FOLDER_ID }}
+          WEEKLY_REPORT_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
+          GOOGLE_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
           MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
@@ -74,10 +74,10 @@ jobs:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-          WEEKLY_REPORT_DRIVE_FOLDER_ID: ${{ secrets.WEEKLY_REPORT_DRIVE_FOLDER_ID }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID || vars.GOOGLE_DRIVE_FOLDER_ID }}
-          PUBLIC_REPORT_DRIVE_FOLDER_ID: ${{ vars.PUBLIC_REPORT_DRIVE_FOLDER_ID }}
-          PUBLIC_REPORT_DRIVE_FILE_ID: ${{ vars.PUBLIC_REPORT_DRIVE_FILE_ID }}
+          WEEKLY_REPORT_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
+          GOOGLE_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
+          PUBLIC_REPORT_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
+          PUBLIC_REPORT_DRIVE_FILE_ID: ""
           FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
           MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}

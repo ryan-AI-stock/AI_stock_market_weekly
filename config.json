@@ -216,7 +216,7 @@
 
   "drive_report": {
     "enabled": true,
-    "folder_id": "1Do1tG2n_HPY1MmMVj2oYRxO6CLPrOv1T",
+    "folder_id": "16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn",
     "folder_path": [],
     "image_width": 1080,
     "format": "pdf"
@@ -224,9 +224,9 @@
 
   "public_report": {
     "enabled": true,
-    "folder_id": "1HnfRzfdu5XeBF51zBKBLvhTNZ8Z-rSCS",
+    "folder_id": "16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn",
     "fixed_file_id": "",
-    "fixed_file_name": "每週台股報告.pdf",
+    "fixed_file_name": "台股加權及中大型權值股訊號追蹤_每週台股報告.pdf",
     "format": "pdf",
     "make_public": true
   }
