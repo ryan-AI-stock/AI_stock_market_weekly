@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from stock_market_tracking_system import (
+    ReportDataNotReadyError,
     TAIPEI_TZ,
     last_twse_trading_day_of_week,
     latest_twse_trading_day,
@@ -37,7 +38,7 @@ class ValidateCompleteReportResultsTests(unittest.TestCase):
             ("加權指數", "^TWII", {"data_date": self.expected_date}),
         ]
 
-        with self.assertRaisesRegex(RuntimeError, "缺少 台積電"):
+        with self.assertRaisesRegex(ReportDataNotReadyError, "缺少 台積電"):
             validate_complete_report_results(results, self.watchlist, self.expected_date)
 
     def test_rejects_stale_stock(self):
@@ -46,8 +47,19 @@ class ValidateCompleteReportResultsTests(unittest.TestCase):
             ("台積電", "2330.TW", {"data_date": "2026-06-04"}),
         ]
 
-        with self.assertRaisesRegex(RuntimeError, "資料日不符 台積電"):
+        with self.assertRaisesRegex(ReportDataNotReadyError, "資料日不符 台積電"):
             validate_complete_report_results(results, self.watchlist, self.expected_date)
+
+    def test_duplicate_ticker_remains_a_hard_failure(self):
+        results = [
+            ("加權指數", "^TWII", {"data_date": self.expected_date}),
+            ("台積電", "2330.TW", {"data_date": self.expected_date}),
+            ("台積電", "2330.TW", {"data_date": self.expected_date}),
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "重複標的 2330.TW") as caught:
+            validate_complete_report_results(results, self.watchlist, self.expected_date)
+        self.assertNotIsInstance(caught.exception, ReportDataNotReadyError)
 
 
 class WeeklyTradingDateTests(unittest.TestCase):

@@ -23,6 +23,10 @@ on:
         default: ''
         type: string
 
+concurrency:
+  group: weekly-taiwan-stock-market-report
+  cancel-in-progress: false
+
 jobs:
   run-weekly-signal:
     runs-on: ubuntu-latest
@@ -82,4 +86,15 @@ jobs:
           MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
           SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
-        run: python stock_market_tracking_system.py
+        shell: bash
+        run: |
+          set +e
+          python stock_market_tracking_system.py
+          status=$?
+          set -e
+          if [ "$status" -eq 75 ]; then
+            echo "### 週報等待收盤資料" >> "$GITHUB_STEP_SUMMARY"
+            echo "目標交易日資料尚未完整，這不是程式錯誤；下一次每小時排程會自動重試。" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$status"

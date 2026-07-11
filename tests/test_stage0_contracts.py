@@ -363,6 +363,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow.count("REPORT_TEST_DRIVE_FOLDER_ID:"), 2)
         self.assertEqual(workflow.count("MANUAL_RERUN:"), 2)
         self.assertEqual(workflow.count("SCHEDULE_RULES_PATH:"), 2)
+        self.assertIn('if [ "$status" -eq 75 ]', workflow)
+        self.assertIn("下一次每小時排程會自動重試", workflow)
+        self.assertIn("group: weekly-taiwan-stock-market-report", workflow)
 
 
 if __name__ == "__main__":

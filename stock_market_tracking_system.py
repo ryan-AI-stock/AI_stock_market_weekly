@@ -2927,6 +2927,13 @@ def upload_public_report_file(file_path: Path | None, cfg: dict) -> str | None:
     return uploaded.get("webViewLink") if uploaded else None
 
 
+class ReportDataNotReadyError(RuntimeError):
+    """The target trading-day inputs are incomplete and should be retried later."""
+
+
+REPORT_DATA_NOT_READY_EXIT_CODE = 75
+
+
 def validate_complete_report_results(results: list, watchlist: list, expected_date: str) -> None:
     expected = {stock["ticker"]: stock.get("name", stock["ticker"]) for stock in watchlist}
     actual = {}
@@ -2950,8 +2957,10 @@ def validate_complete_report_results(results: list, watchlist: list, expected_da
     if duplicates:
         issues.append(f"重複標的 {', '.join(sorted(set(duplicates)))}")
 
-    if issues:
+    if duplicates:
         raise RuntimeError(f"週報完整性檢查失敗：{'；'.join(issues)}")
+    if issues:
+        raise ReportDataNotReadyError(f"週報目標日資料尚未齊全：{'；'.join(issues)}")
 
 
 def _write_github_output(name: str, value: str) -> None:
@@ -3209,5 +3218,9 @@ if __name__ == "__main__":
     if "--schedule-gate" in sys.argv:
         run_schedule_gate()
     else:
-        main()
+        try:
+            main()
+        except ReportDataNotReadyError as exc:
+            print(f"REPORT_DATA_NOT_READY: {exc}", file=sys.stderr)
+            raise SystemExit(REPORT_DATA_NOT_READY_EXIT_CODE) from exc
 
