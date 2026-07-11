@@ -408,19 +408,95 @@ def _fetch_twse_index_data(start_date, end_date) -> pd.DataFrame:
 
 
 def fetch_twse_closed_dates(years: set[int]) -> set[date]:
+    try:
+        closed_dates = set()
+        for year in sorted(years):
+            url = (
+                "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule"
+                f"?response=json&queryYear={year - 1911}"
+            )
+            resp = requests.get(url, headers=_twse_headers(), timeout=15)
+            resp.raise_for_status()
+            payload = resp.json()
+            if str(payload.get("stat", "")).lower() != "ok":
+                raise RuntimeError(f"證交所 {year} 年休市日曆回傳異常：{payload.get('stat')}")
+            closed_dates.update(parse_twse_closed_dates(payload))
+        return closed_dates
+    except (requests.RequestException, ValueError, RuntimeError):
+        return fetch_twse_openapi_closed_dates(years)
+
+
+def fetch_twse_openapi_closed_dates(years: set[int]) -> set[date]:
+    response = requests.get(
+        "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
+        headers=_twse_headers(),
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
     closed_dates = set()
-    for year in sorted(years):
-        url = (
-            "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule"
-            f"?response=json&queryYear={year - 1911}"
-        )
-        resp = requests.get(url, headers=_twse_headers(), timeout=15)
-        resp.raise_for_status()
-        payload = resp.json()
-        if str(payload.get("stat", "")).lower() != "ok":
-            raise RuntimeError(f"證交所 {year} 年休市日曆回傳異常：{payload.get('stat')}")
-        closed_dates.update(parse_twse_closed_dates(payload))
+    for row in payload:
+        raw_date = str(row.get("Date", ""))
+        if len(raw_date) != 7 or not raw_date.isdigit():
+            continue
+        trade_date = date(int(raw_date[:3]) + 1911, int(raw_date[3:5]), int(raw_date[5:7]))
+        if trade_date.year not in years:
+            continue
+        name = str(row.get("Name", ""))
+        if "開始交易" not in name and "最後交易" not in name:
+            closed_dates.add(trade_date)
+    if not closed_dates:
+        raise RuntimeError("證交所 OpenAPI 休市日曆沒有可用資料")
     return closed_dates
+
+
+def fetch_official_market_session_state(trade_date: date) -> str:
+    """Return open/closed/unknown from both official after-trading sources."""
+    ymd = trade_date.strftime("%Y%m%d")
+    slash_date = trade_date.strftime("%Y/%m/%d")
+    urls = (
+        (
+            "twse",
+            "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
+            f"?date={ymd}&type=ALLBUT0999&response=json",
+        ),
+        (
+            "tpex",
+            "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc"
+            f"?date={slash_date}&type=EW&response=json",
+        ),
+    )
+    row_counts = {}
+    try:
+        for market, url in urls:
+            response = requests.get(url, headers=_twse_headers(), timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+            row_counts[market] = sum(len(table.get("data") or []) for table in payload.get("tables") or [])
+    except (requests.RequestException, ValueError, TypeError):
+        return "unknown"
+    if any(count > 0 for count in row_counts.values()):
+        return "open"
+    return "closed" if len(row_counts) == 2 else "unknown"
+
+
+def add_recent_emergency_market_closure(
+    now: datetime,
+    closed_dates: set[date],
+    run_after: time,
+) -> set[date]:
+    """Add an unscheduled closure only when both official markets confirm no session."""
+    updated = set(closed_dates)
+    candidate = now.date()
+    if candidate.weekday() >= 5:
+        candidate -= timedelta(days=candidate.weekday() - 4)
+    elif now.time() < run_after:
+        candidate -= timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+    if candidate not in updated and fetch_official_market_session_state(candidate) == "closed":
+        updated.add(candidate)
+    return updated
 
 
 def parse_twse_closed_dates(payload: dict) -> set[date]:
@@ -496,6 +572,7 @@ def resolve_report_target(now: datetime, force_run: bool) -> date:
         raise RuntimeError(
             f"無法取得證交所官方休市日曆，為避免選錯週報日，本次中止並等待下次重試：{exc}"
         ) from exc
+    closed_dates = add_recent_emergency_market_closure(dt, closed_dates, run_after)
     if force_run:
         return resolve_weekly_report_target(dt, closed_dates, run_after=run_after)
     return resolve_weekly_report_target(dt, closed_dates, run_after=run_after)

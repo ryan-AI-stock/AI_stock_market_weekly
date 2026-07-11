@@ -1,11 +1,12 @@
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from unittest.mock import patch
 
 from stock_market_tracking_system import (
     ReportDataNotReadyError,
     TAIPEI_TZ,
+    add_recent_emergency_market_closure,
     last_twse_trading_day_of_week,
     latest_twse_trading_day,
     load_schedule_rules,
@@ -63,6 +64,22 @@ class ValidateCompleteReportResultsTests(unittest.TestCase):
 
 
 class WeeklyTradingDateTests(unittest.TestCase):
+    def test_emergency_closure_moves_friday_target_to_thursday(self):
+        now = datetime(2026, 7, 10, 18, 0, tzinfo=TAIPEI_TZ)
+
+        with patch("weekly_data_sources.fetch_official_market_session_state", return_value="closed"):
+            closed = add_recent_emergency_market_closure(now, set(), time(15, 0))
+
+        self.assertIn(date(2026, 7, 10), closed)
+        self.assertEqual(resolve_weekly_report_target(now, closed), date(2026, 7, 9))
+
+    def test_unknown_market_state_does_not_invent_closure(self):
+        now = datetime(2026, 7, 10, 18, 0, tzinfo=TAIPEI_TZ)
+
+        with patch("weekly_data_sources.fetch_official_market_session_state", return_value="unknown"):
+            closed = add_recent_emergency_market_closure(now, set(), time(15, 0))
+
+        self.assertNotIn(date(2026, 7, 10), closed)
     def test_holiday_calendar_excludes_named_trading_days(self):
         payload = {
             "data": [

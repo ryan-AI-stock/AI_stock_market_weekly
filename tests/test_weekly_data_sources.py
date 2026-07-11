@@ -1,5 +1,6 @@
 import unittest
 from datetime import date, datetime
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -10,10 +11,25 @@ from weekly_data_sources import (
     _is_fresh_price_data,
     _parse_float,
     _parse_int,
+    fetch_twse_closed_dates,
 )
 
 
 class WeeklyDataSourceUtilityTests(unittest.TestCase):
+    def test_holiday_calendar_uses_official_openapi_fallback(self):
+        bad_response = Mock()
+        bad_response.json.side_effect = ValueError("invalid json")
+        fallback_dates = {date(2026, 2, 16)}
+
+        with (
+            patch("weekly_data_sources.requests.get", return_value=bad_response),
+            patch("weekly_data_sources.fetch_twse_openapi_closed_dates", return_value=fallback_dates) as fallback,
+        ):
+            result = fetch_twse_closed_dates({2026})
+
+        self.assertEqual(result, fallback_dates)
+        fallback.assert_called_once_with({2026})
+
     def test_parse_number_helpers_tolerate_commas_and_empty_values(self):
         self.assertEqual(_parse_int("1,234 "), 1234)
         self.assertEqual(_parse_int("--"), 0)

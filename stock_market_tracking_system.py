@@ -46,6 +46,7 @@ from weekly_data_sources import (
     _series_change_pct,
     _twse_headers,
     _week_bounds,
+    add_recent_emergency_market_closure,
     fetch_data,
     fetch_institutional,
     fetch_market_context,
