@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: '手動補跑預設會忽略同週已產出檢查，重新產生並覆蓋固定 PDF'
+        description: '手動 Action 永遠強制重新產生；此欄位僅保留相容性'
         required: false
         default: 'true'
         type: choice
@@ -61,7 +61,7 @@ jobs:
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           WEEKLY_REPORT_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
           GOOGLE_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
-          FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
+          FORCE_RUN_REPORT: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
           SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
@@ -82,7 +82,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
           PUBLIC_REPORT_DRIVE_FOLDER_ID: 16SmfPgMMIs7MWteeX1h2EkhSIEaGvpHn
           PUBLIC_REPORT_DRIVE_FILE_ID: ""
-          FORCE_RUN_REPORT: ${{ github.event.inputs.force_run || 'false' }}
+          FORCE_RUN_REPORT: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
           SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json

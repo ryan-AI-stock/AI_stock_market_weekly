@@ -362,6 +362,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("MANUAL_RERUN:", workflow)
         self.assertEqual(workflow.count("REPORT_TEST_DRIVE_FOLDER_ID:"), 2)
         self.assertEqual(workflow.count("MANUAL_RERUN:"), 2)
+        self.assertEqual(
+            workflow.count("github.event_name == 'workflow_dispatch' && 'true' || 'false'"),
+            4,
+        )
         self.assertEqual(workflow.count("SCHEDULE_RULES_PATH:"), 2)
         self.assertIn('if [ "$status" -eq 75 ]', workflow)
         self.assertIn("下一次每小時排程會自動重試", workflow)
