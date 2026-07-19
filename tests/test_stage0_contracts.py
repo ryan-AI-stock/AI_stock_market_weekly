@@ -338,13 +338,15 @@ class ScheduleGateContractTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
-    def test_workflow_keeps_hourly_schedule_and_schedule_gate(self):
+    def test_workflow_uses_weekday_schedule_and_shared_gate(self):
         workflow_path = (
             Path(__file__).resolve().parents[1] / ".github" / "workflows" / "weekly_run.yml"
         )
         workflow = workflow_path.read_text(encoding="utf-8")
 
-        self.assertIn("- cron: '0 * * * *'", workflow)
+        self.assertIn("- cron: '0 7-15 * * 1-5'", workflow)
+        self.assertNotIn("- cron: '0 * * * *'", workflow)
+        self.assertIn("--profile weekly", workflow)
         self.assertIn(
             "run: python stock_market_tracking_system.py --schedule-gate",
             workflow,
@@ -368,7 +370,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(workflow.count("SCHEDULE_RULES_PATH:"), 2)
         self.assertIn('if [ "$status" -eq 75 ]', workflow)
-        self.assertIn("下一次每小時排程會自動重試", workflow)
+        self.assertIn("只會在同一交易日的後續排程重試", workflow)
         self.assertIn("group: weekly-taiwan-stock-market-report", workflow)
 
 

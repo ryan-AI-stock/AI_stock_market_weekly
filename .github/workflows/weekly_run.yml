@@ -2,11 +2,9 @@ name: Weekly Taiwan Stock Market Report
 
 on:
   schedule:
-    # Wake hourly so a failed weekly report can keep retrying across days
-    # without a 23:00 cutoff. The runtime gate reads AI_stock_schedule_rules,
-    # starts only after the weekly profile's run_after on the week's actual
-    # final TWSE trading day, and stops once the fixed public Drive PDF is current.
-    - cron: '0 * * * *'
+    # Wake only during Taipei weekday afternoons/evenings. The shared TWSE gate
+    # runs only on the week's actual final trading day.
+    - cron: '0 7-15 * * 1-5'
   workflow_dispatch:
     inputs:
       force_run:
@@ -49,12 +47,30 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Check shared weekly trading-day gate
+        id: trading-day-gate
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "reason=workflow_dispatch_bypass" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PYTHONPATH=AI_stock_schedule_rules python -m stock_schedule_rules.gate --profile weekly --github-output "$GITHUB_OUTPUT"
+
+      - name: Stop outside the weekly trading-day window
+        if: steps.trading-day-gate.outputs.should_run != 'true'
+        run: echo "Shared schedule gate skipped this run. reason=${{ steps.trading-day-gate.outputs.reason }}"
+
       - name: Install Python packages
+        if: steps.trading-day-gate.outputs.should_run == 'true'
         run: |
           pip install yfinance pandas requests playwright google-api-python-client google-auth
 
       - name: Check whether a weekly report is pending
         id: schedule-gate
+        if: steps.trading-day-gate.outputs.should_run == 'true'
+        # The repo gate also stops when the fixed public Drive PDF is current.
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
@@ -94,7 +110,7 @@ jobs:
           set -e
           if [ "$status" -eq 75 ]; then
             echo "### 週報等待收盤資料" >> "$GITHUB_STEP_SUMMARY"
-            echo "目標交易日資料尚未完整，這不是程式錯誤；下一次每小時排程會自動重試。" >> "$GITHUB_STEP_SUMMARY"
+            echo "目標交易日資料尚未完整，這不是程式錯誤；只會在同一交易日的後續排程重試。" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           exit "$status"
