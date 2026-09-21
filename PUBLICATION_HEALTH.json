@@ -1,0 +1,12 @@
+{
+  "checked_at": "2026-09-21T08:14:15.058537+08:00",
+  "artifact": "weekly_pdf",
+  "result": {
+    "status": "current",
+    "expected_date": "2026-09-18",
+    "observed_date": "2026-09-18",
+    "pages": 4,
+    "modified_time": "2026-09-20T23:59:32.152Z"
+  },
+  "audit_run_url": "https://github.com/ryan-AI-stock/AI_stock_rotation_radar/actions/runs/35547021397"
+}
