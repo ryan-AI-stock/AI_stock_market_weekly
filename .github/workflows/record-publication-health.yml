@@ -1,0 +1,49 @@
+name: Record verified publication health
+on:
+  workflow_dispatch:
+    inputs:
+      evidence:
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: publication-health-maintenance
+  cancel-in-progress: false
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and save actual audit receipt
+        env:
+          EVIDENCE: ${{ inputs.evidence }}
+          REPOSITORY: ${{ github.event.repository.name }}
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from datetime import datetime, timezone, timedelta
+          from pathlib import Path
+          value = json.loads(os.environ['EVIDENCE'])
+          expected = {'AI_stock_market_daily':'daily_pdf', 'AI_stock_market_weekly':'weekly_pdf'}[os.environ['REPOSITORY']]
+          assert value['artifact'] == expected
+          result = value['result']
+          assert result['status'] == 'current'
+          assert result['expected_date'] == result['observed_date']
+          assert re.fullmatch(r'20\d{2}-\d{2}-\d{2}', result['observed_date'])
+          checked = datetime.fromisoformat(value['checked_at'])
+          assert timedelta(0) <= datetime.now(timezone.utc)-checked <= timedelta(days=1)
+          assert re.fullmatch(r'https://github.com/ryan-AI-stock/AI_stock_rotation_radar/actions/runs/\d+', value['audit_run_url'])
+          Path('PUBLICATION_HEALTH.json').write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+      - name: Commit verified evidence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add PUBLICATION_HEALTH.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Record verified publication health'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
