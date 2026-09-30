@@ -33,7 +33,8 @@ concurrency:
 jobs:
   run-weekly-signal:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 完整週報單次可需8分鐘；保留三次資料重抓所需時間。
+    timeout-minutes: 45
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
