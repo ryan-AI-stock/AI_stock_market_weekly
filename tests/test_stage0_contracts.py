@@ -369,8 +369,8 @@ class WorkflowContractTests(unittest.TestCase):
             4,
         )
         self.assertEqual(workflow.count("SCHEDULE_RULES_PATH:"), 2)
-        self.assertIn('if [ "$status" -eq 75 ]', workflow)
-        self.assertIn("只會在同一交易日的後續排程重試", workflow)
+        self.assertIn('if [ "$status" -ne 75 ]', workflow)
+        self.assertIn("三次下載後週報目標交易日資料仍未齊", workflow)
         self.assertIn("group: weekly-taiwan-stock-market-report", workflow)
 
 

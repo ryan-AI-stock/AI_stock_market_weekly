@@ -2972,6 +2972,16 @@ def manual_rerun_requested() -> bool:
     return env_flag("MANUAL_RERUN") or os.environ.get("GITHUB_EVENT_NAME", "").strip() == "workflow_dispatch"
 
 
+def exact_report_date_override():
+    value = os.environ.get("REPORT_DATE", "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("REPORT_DATE must be YYYY-MM-DD") from exc
+
+
 def _rerun_bypasses_completion_gate(force_run: bool, manual_rerun: bool) -> bool:
     return bool(force_run or manual_rerun)
 
@@ -3017,7 +3027,7 @@ def run_schedule_gate() -> None:
     if os.environ.get("SCHEDULE_RULES_PATH"):
         print(f"排程規則來源：{os.environ['SCHEDULE_RULES_PATH']}")
     try:
-        target_date = resolve_report_target(now_tw, bypass_completion_gate)
+        target_date = exact_report_date_override() or resolve_report_target(now_tw, bypass_completion_gate)
     except Exception as exc:
         _write_github_output("target_date", "")
         _write_github_output("should_run", "false")
@@ -3054,7 +3064,7 @@ def prepare_weekly_run(cfg: dict, now_tw: datetime | None = None, force_run: boo
     force_run = env_flag("FORCE_RUN_REPORT") if force_run is None else force_run
     manual_rerun = manual_rerun_requested()
     bypass_completion_gate = _rerun_bypasses_completion_gate(force_run, manual_rerun)
-    target_date = resolve_report_target(now_tw, bypass_completion_gate)
+    target_date = exact_report_date_override() or resolve_report_target(now_tw, bypass_completion_gate)
     expected_date = target_date.strftime("%Y-%m-%d")
     target_dt = datetime.combine(target_date, WEEKLY_REPORT_START_TIME, tzinfo=TAIPEI_TZ)
     report_meta = get_report_meta(target_dt)

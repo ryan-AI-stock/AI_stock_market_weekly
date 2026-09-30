@@ -20,6 +20,11 @@ on:
         required: false
         default: ''
         type: string
+      report_date:
+        description: '精確補跑的週報最後交易日，YYYY-MM-DD；指定後不可改用其他日期'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: weekly-taiwan-stock-market-report
@@ -80,6 +85,7 @@ jobs:
           FORCE_RUN_REPORT: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
+          REPORT_DATE: ${{ github.event.inputs.report_date || '' }}
           SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
         run: python stock_market_tracking_system.py --schedule-gate
 
@@ -101,16 +107,22 @@ jobs:
           FORCE_RUN_REPORT: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           MANUAL_RERUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           REPORT_TEST_DRIVE_FOLDER_ID: ${{ github.event.inputs.test_drive_folder_id || '' }}
+          REPORT_DATE: ${{ github.event.inputs.report_date || '' }}
           SCHEDULE_RULES_PATH: ${{ github.workspace }}/AI_stock_schedule_rules/schedule_rules.json
         shell: bash
         run: |
-          set +e
-          python stock_market_tracking_system.py
-          status=$?
-          set -e
-          if [ "$status" -eq 75 ]; then
-            echo "### 週報等待收盤資料" >> "$GITHUB_STEP_SUMMARY"
-            echo "目標交易日資料尚未完整，這不是程式錯誤；只會在同一交易日的後續排程重試。" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          exit "$status"
+          for attempt in 1 2 3; do
+            set +e
+            python stock_market_tracking_system.py
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then exit 0; fi
+            if [ "$status" -ne 75 ]; then exit "$status"; fi
+            if [ "$attempt" -lt 3 ]; then
+              wait_minutes=$((attempt * 3))
+              echo "週報目標交易日資料尚未齊（${attempt}/3），${wait_minutes}分鐘後重新下載。"
+              sleep $((wait_minutes * 60))
+            fi
+          done
+          echo "::error::三次下載後週報目標交易日資料仍未齊；未發布舊報告，交由下一排程與外部監控補救。"
+          exit 75

@@ -17,6 +17,20 @@ from stock_market_tracking_system import (
 
 
 class WeeklyOrchestrationTests(unittest.TestCase):
+    def test_report_date_override_is_exact(self):
+        cfg = {"watchlist": []}
+        now = datetime(2026, 6, 23, 16, 0, tzinfo=TAIPEI_TZ)
+        with patch.dict("os.environ", {"REPORT_DATE": "2026-06-19"}, clear=False):
+            run = prepare_weekly_run(cfg, now_tw=now, force_run=True)
+
+        self.assertEqual(run["expected_date"], "2026-06-19")
+
+    def test_workflow_has_bounded_download_retry_and_exact_date(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "weekly_run.yml").read_text(encoding="utf-8")
+        self.assertIn("report_date:", workflow)
+        self.assertIn("for attempt in 1 2 3", workflow)
+        self.assertIn("exit 75", workflow)
+
     def test_prepare_weekly_run_builds_report_context(self):
         cfg = {"watchlist": []}
         now = datetime(2026, 6, 5, 16, 0, tzinfo=TAIPEI_TZ)
